@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UM982 双天线 RTK 上位机</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1017'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%2338bdf8' stroke-width='2'/%3E%3Ccircle cx='16' cy='7' r='3' fill='%234ade80'/%3E%3Ccircle cx='24' cy='21' r='2.5' fill='%23facc15'/%3E%3Ccircle cx='8' cy='21' r='2.5' fill='%23f87171'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div>
+      <h1>UM982 双天线 RTK 上位机</h1>
+      <p class="sub" id="subtitle">等待连接…</p>
+    </div>
+  </div>
+  <div class="topbar-stats">
+    <div class="stat"><span class="stat-label">链路</span><span class="stat-value" id="statLink">离线</span></div>
+    <div class="stat"><span class="stat-label">报文速率</span><span class="stat-value" id="statRate">—</span></div>
+    <div class="stat"><span class="stat-label">接收字节</span><span class="stat-value" id="statBytes">—</span></div>
+    <div class="stat"><span class="stat-label">航向</span><span class="stat-value" id="statHeading">—</span></div>
+    <div class="stat"><span class="stat-label">定位</span><span class="stat-value" id="statFix">—</span></div>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ============ 左列 ============ -->
+  <div class="column">
+
+    <section class="card">
+      <h2>串口连接</h2>
+      <div class="row">
+        <label>串口</label>
+        <select id="portSelect"></select>
+        <button class="icon-btn" id="btnRefresh" title="刷新串口列表">⟳</button>
+      </div>
+      <div class="row">
+        <label>波特率</label>
+        <select id="baudSelect">
+          <option>4800</option><option>9600</option><option>19200</option>
+          <option>38400</option><option>57600</option><option>115200</option>
+          <option>230400</option><option>460800</option><option>921600</option>
+        </select>
+      </div>
+      <div class="row checks">
+        <label class="check"><input type="checkbox" id="chkReconnect" checked> 断线自动重连</label>
+      </div>
+      <div class="row checks">
+        <label class="check"><input type="checkbox" id="chkQuery" checked> 连接后查询设备信息</label>
+      </div>
+      <div class="btn-row">
+        <button class="primary" id="btnConnect">连接</button>
+        <button id="btnDisconnect">断开</button>
+        <button id="btnIdentify" title="短暂试读串口，判断是否为 GNSS 接收机">试读</button>
+      </div>
+      <p class="hint">提示：CH340 / CP210x / FT232 这类 USB 转串口通常是 UM982 评估板的接口。</p>
+      <p class="hint warn-hint" id="linkError" hidden></p>
+      <pre class="mini-log" id="identifyOut" hidden></pre>
+    </section>
+
+    <section class="card compass-card">
+      <h2>双天线航向
+        <span class="badge" id="headingSrcBadge">—</span>
+      </h2>
+      <canvas id="compass" width="560" height="560"></canvas>
+      <div class="heading-readout">
+        <div class="big-number"><span id="headingValue">—</span><small>°</small></div>
+        <div class="heading-side">
+          <div><span class="k">俯仰</span><span class="v" id="pitchValue">—</span></div>
+          <div><span class="k">基线长度</span><span class="v" id="baselineValue">—</span></div>
+          <div><span class="k">航向标准差</span><span class="v" id="headingSigma">—</span></div>
+        </div>
+      </div>
+      <div class="bubble-wrap">
+        <div class="bubble"><div class="bubble-dot" id="pitchBubble"></div></div>
+        <span class="bubble-label">俯仰水平仪 ±15°</span>
+      </div>
+      <div class="solve-row">
+        <span class="badge" id="solBadge">—</span>
+        <span class="badge" id="posTypeBadge">—</span>
+      </div>
+      <table class="kv-table">
+        <tbody>
+          <tr><th>NMEA $GPTHS</th><td id="thsValue">—</td></tr>
+          <tr><th>UNIHEADINGA 航向</th><td id="logHeadingValue">—</td></tr>
+          <tr><th>两者差值</th><td id="mismatchValue">—</td></tr>
+        </tbody>
+      </table>
+      <label class="check small"><input type="checkbox" id="chkSwap">
+        交换 UNIHEADINGA 中的航向/俯仰字段</label>
+      <p class="hint">若「两者差值」长期很大，说明字段顺序与默认映射不一致，勾选此项即可纠正。</p>
+    </section>
+
+  </div>
+
+  <!-- ============ 中列 ============ -->
+  <div class="column">
+
+    <section class="card">
+      <h2>定位信息 <span class="badge" id="fixBadge">—</span></h2>
+      <div class="pos-grid">
+        <div class="pos-item"><span class="k">纬度</span><span class="v mono" id="posLat">—</span></div>
+        <div class="pos-item"><span class="k">经度</span><span class="v mono" id="posLon">—</span></div>
+        <div class="pos-item"><span class="k">椭球高</span><span class="v mono" id="posAlt">—</span></div>
+        <div class="pos-item"><span class="k">参与解算卫星</span><span class="v mono" id="posSv">—</span></div>
+        <div class="pos-item"><span class="k">HDOP</span><span class="v mono" id="posHdop">—</span></div>
+        <div class="pos-item"><span class="k">差分龄期</span><span class="v mono" id="posDiffAge">—</span></div>
+        <div class="pos-item"><span class="k">UTC 时间</span><span class="v mono" id="posUtc">—</span></div>
+        <div class="pos-item"><span class="k">地面速度</span><span class="v mono" id="posSpeed">—</span></div>
+        <div class="pos-item"><span class="k">地面航迹角</span><span class="v mono" id="posCourse">—</span></div>
+        <div class="pos-item"><span class="k">定位来源</span><span class="v" id="posSource">—</span></div>
+        <div class="pos-item"><span class="k">基准站 ID</span><span class="v mono" id="posStation">—</span></div>
+        <div class="pos-item"><span class="k">速度 北/东/天</span><span class="v mono" id="posVelNeu">—</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>卫星星空图
+        <span class="badge" id="satCountBadge">—</span>
+      </h2>
+      <div class="sky-wrap">
+        <canvas id="skyplot" width="520" height="520"></canvas>
+        <div class="legend" id="skyLegend"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>信噪比 C/N0
+        <span class="badge" id="cn0Badge">—</span>
+      </h2>
+      <canvas id="snrChart" width="900" height="420"></canvas>
+    </section>
+
+    <section class="card">
+      <h2>卫星列表 <span class="badge" id="satTableBadge">—</span></h2>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>系统</th><th>PRN</th><th>仰角</th><th>方位角</th><th>C/N0</th><th id="satUsedHeader">参与解算</th></tr>
+          </thead>
+          <tbody id="satTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ============ 右列 ============ -->
+  <div class="column">
+
+    <section class="card">
+      <h2>状态提示 <span class="badge" id="alertBadge">—</span></h2>
+      <ul class="alerts" id="alertList"><li class="alert info">等待数据…</li></ul>
+    </section>
+
+    <section class="card">
+      <h2>设备信息</h2>
+      <table class="kv-table">
+        <tbody>
+          <tr><th>型号</th><td id="devModel">—</td></tr>
+          <tr><th>固件</th><td id="devFw">—</td></tr>
+          <tr><th>产品编号</th><td id="devProduct">—</td></tr>
+          <tr><th>序列号</th><td id="devSerial">—</td></tr>
+          <tr><th>固件日期</th><td id="devDate">—</td></tr>
+          <tr><th>当前模式</th><td id="devMode">—</td></tr>
+          <tr><th>模块串口</th><td id="devPort">—</td></tr>
+        </tbody>
+      </table>
+      <details>
+        <summary>模块配置（<span id="configCount">0</span> 项）</summary>
+        <pre class="mini-log" id="configList"></pre>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>模块日志配置
+        <span class="badge" id="logListBadge">未查询</span>
+      </h2>
+      <p class="hint">
+        来自模块 <code>LOGLIST</code> 回显（只读）。这是判断「双天线定向 / 定位日志是否真的在输出」
+        的权威依据，也能确认本连接实际位于模块的哪个串口。
+      </p>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>端口</th><th>日志</th><th>周期</th></tr></thead>
+          <tbody id="logListBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>数据记录</h2>
+      <div class="row">
+        <label>CSV 间隔</label>
+        <input type="number" id="recInterval" value="0.2" min="0.02" max="10" step="0.02">
+        <span class="unit">秒</span>
+      </div>
+      <div class="btn-row">
+        <button id="btnRecAll">开始记录</button>
+        <button id="btnRecStop">停止记录</button>
+      </div>
+      <table class="kv-table">
+        <tbody>
+          <tr><th>原始日志</th><td id="recRawState">未记录</td></tr>
+          <tr><th>行数</th><td id="recRawLines">0</td></tr>
+          <tr><th>CSV 文件</th><td id="recCsvState">未记录</td></tr>
+          <tr><th>CSV 行数</th><td id="recCsvRows">0</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Unicore 命令控制台</h2>
+      <p class="hint">
+        实测命令<strong>不带</strong> <code>#</code>/<code>$</code> 前缀，直接发送文本 + CRLF，且无需校验和。
+        例如 <code>VERSION</code>、<code>MODE</code>、<code>CONFIG</code>。
+      </p>
+      <p class="hint warn-hint">
+        <strong>注意：</strong><code>UNLOGALL</code> 会清空当前日志配置，<code>SAVECONFIG</code>
+        会把配置写入模块 flash（断电/重启后仍生效，界面上无法一键还原）。
+        预设已把写 flash 单独拆成一个按钮，请勿连带发送。
+      </p>
+      <div class="preset-row" id="presetRow"></div>
+      <div class="row">
+        <label>模块串口</label>
+        <select id="modulePortSelect" title="LOG / UNLOG 的目标端口。模块的 COM1/COM2 与电脑上的 COM10 不是一回事"></select>
+      </div>
+      <textarea id="cmdText" rows="3" placeholder="LOG COM1 UNIHEADINGA ONTIME 0.1"></textarea>
+      <div class="row">
+        <label>行尾</label>
+        <select id="eolSelect">
+          <option value="crlf" selected>CR LF</option>
+          <option value="lf">LF</option>
+          <option value="cr">CR</option>
+        </select>
+        <label>校验</label>
+        <select id="checksumSelect">
+          <option value="none" selected>无（实测可用）</option>
+          <option value="crc32">CRC32</option>
+          <option value="xor">XOR</option>
+        </select>
+      </div>
+      <div class="btn-row">
+        <button class="primary" id="btnSend">发送</button>
+        <button id="btnClearCmd">清空</button>
+      </div>
+      <pre class="mini-log" id="ackLog"></pre>
+    </section>
+
+  </div>
+</main>
+
+<section class="card full-width">
+  <h2>原始报文监视
+    <span class="badge" id="rawBadge">—</span>
+    <span class="raw-controls">
+      <label class="check small"><input type="checkbox" id="chkRawAuto" checked> 自动滚动</label>
+      <input type="text" id="rawFilter" placeholder="过滤关键字，如 GGA / UNIHEADINGA">
+      <button id="btnRawPause">暂停</button>
+      <button id="btnRawClear">清空</button>
+    </span>
+  </h2>
+  <pre class="raw-monitor" id="rawMonitor"></pre>
+</section>
+
+<footer class="statusbar">
+  <span id="footerLink">未连接</span>
+  <span id="footerNotes"></span>
+  <span id="footerServer"></span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
