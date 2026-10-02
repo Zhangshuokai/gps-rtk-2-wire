@@ -5,8 +5,12 @@ UM982 实测输出的语句（除 ``#`` 开头的 Unicore ASCII 报文外）::
     $GNGGA,,,,,,0,,,,,,,,*78
     $GNRMC,,V,,,,,,,,,,N,V*37
     $GPGSV,1,1,00,,,,,*55
-    $GPGSVH,1,1,00,,,,,*1D      <- Unicore 扩展：更高精度的 GSV
+    $GPGSVH,1,1,00,,,,,*1D      <- 从天线（slave antenna）的 GSV
     $GPTHS,,V*0E                <- 双天线真实航向
+
+「H 后缀 = 从天线」：厂家手册 §7.4 把 ``$--GGAH`` / ``$--GSAH`` / ``$--GSVH`` /
+``$--RMCH`` / ``$--VTGH`` / ``$--GSTH`` 等定义为 Slave Antenna 版本（不是「高精度」）。
+解析结果用 ``antenna`` 字段区分主/从天线，状态层据此分成两套卫星表。
 
 本模块只负责把语句解析成结构化字典，不做任何状态保持。
 """
@@ -16,7 +20,10 @@ from __future__ import annotations
 import math
 
 NMEA_KINDS = (
-    'GSVH', 'GGA', 'RMC', 'GSV', 'GSA', 'THS', 'VTG', 'GLL', 'ZDA',
+    # 从天线（Slave Antenna）版本排在同名主天线语句之前；它们都以 H 结尾，
+    # 与基名不会互相误判（如 'GGAH' 以 'GGA' 结尾但末字符是 H），顺序仅作可读性保证。
+    'GGAH', 'GLLH', 'GNSH', 'GRSH', 'GSAH', 'GSTH', 'GSVH', 'RMCH', 'VTGH',
+    'GGA', 'RMC', 'GSV', 'GSA', 'THS', 'VTG', 'GLL', 'ZDA',
     'GST', 'HDT', 'GNS', 'TXT', 'VLW', 'ROT', 'DTM', 'GGR',
 )
 
@@ -354,6 +361,24 @@ def _parse_gst(fields: list[str]) -> dict:
     }
 
 
+def _parse_grs(fields: list[str]) -> dict:
+    """``$--GRS`` 距离残差（NMEA 4.11 末尾为 SysID/SignalID，字段数随星座而变）。"""
+    body = fields[3:]
+    system_id = None
+    signal_id = None
+    if len(body) >= 3:
+        system_id = body[-2].strip() or None
+        signal_id = body[-1].strip() or None
+        body = body[:-2]
+    return {
+        'utc': (fields[1].strip() or None) if len(fields) > 1 else None,
+        'mode': _int(fields[2]) if len(fields) > 2 else None,
+        'residuals': [_float(value) for value in body],
+        'system_id': system_id,
+        'signal_id': signal_id,
+    }
+
+
 def _parse_hdt(fields: list[str]) -> dict:
     return {'heading_deg': _float(fields[1]) if len(fields) > 1 else None}
 
@@ -365,6 +390,15 @@ _PARSERS = {
     'GSV': _parse_gsv,
     'GSVH': _parse_gsv,
     'GSA': _parse_gsa,
+    # 从天线（Slave Antenna）版本，字段布局与主天线同名语句一致。
+    'GGAH': lambda t, f: _parse_gga(f),
+    'GNSH': lambda t, f: _parse_gga(f),
+    'GLLH': lambda t, f: _parse_gll(f),
+    'RMCH': lambda t, f: _parse_rmc(f),
+    'VTGH': lambda t, f: _parse_vtg(f),
+    'GSTH': lambda t, f: _parse_gst(f),
+    'GSAH': _parse_gsa,
+    'GRSH': lambda t, f: _parse_grs(f),
     'THS': _parse_ths,
     'VTG': lambda t, f: _parse_vtg(f),
     'GLL': lambda t, f: _parse_gll(f),
@@ -397,6 +431,8 @@ def parse(sentence: str) -> dict | None:
         'kind': kind,
         'talker': talker or '??',
         'system': system_of(talker),
+        # 厂家手册 §7.4：H 后缀是从天线（Slave Antenna）版本，其余视为主天线。
+        'antenna': 'slave' if kind.endswith('H') else 'master',
         'checksum_ok': verify_checksum(text),
         'data': data,
         'raw': text,

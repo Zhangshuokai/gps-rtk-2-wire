@@ -582,9 +582,10 @@ COMMAND_PRESETS = [
         'id': 'telemetry',
         'name': '标准遥测输出',
         'safe': False,
-        'note': '把该端口改成 1Hz 定位 + GSA + 10Hz 双天线定向 + 10Hz 速度（PVTSLNA，北/东分量）。'
+        'note': '把该端口改成 1Hz 定位 + 主/从天线 GSA + 10Hz 双天线定向 + 10Hz 速度（PVTSLNA，北/东分量）。'
                 '日志名取自模块 LOGLIST/help 实测（GPGGA/GPRMC/GPGSA/GNGSV/GPTHS/UNIHEADINGA，'
-                '注意不是 GNGGA/GPGSV）；GPGSA 用于逐星「参与解算」（实发 $GNGSA）；'
+                '注意不是 GNGGA/GPGSV）；H 后缀是从天线（Slave Antenna，见厂家手册 §7.4），'
+                'GPGSA/GPGSAH 用于主/从天线逐星「参与解算」（实发 $GNGSA/$GNGSAH）；'
                 'PVTSLNA 为厂家已识别日志，提供北/东速度（无天向）。'
                 'UNLOGALL 会丢弃原有日志配置，且本预设【不会】写入 flash。',
         'commands': [
@@ -593,6 +594,12 @@ COMMAND_PRESETS = [
             'LOG {PORT} GPRMC ONTIME 1',
             'LOG {PORT} GPGSA ONTIME 1',
             'LOG {PORT} GNGSV ONTIME 1',
+            # 从天线（H 后缀）日志：主/从两套定位、速度、卫星与「参与解算」
+            'LOG {PORT} GPGGAH ONTIME 1',
+            'LOG {PORT} GPRMCH ONTIME 1',
+            'LOG {PORT} GPGSAH ONTIME 1',
+            'LOG {PORT} GNGSVH ONTIME 1',
+            'LOG {PORT} GPGSTH ONTIME 1',
             'LOG {PORT} GPTHS ONTIME 0.1',
             'LOG {PORT} UNIHEADINGA ONTIME 0.1',
             'LOG {PORT} PVTSLNA ONTIME 0.1',

@@ -294,6 +294,9 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
         check('CSV 速度北/东列有值（天向无来源，允许空）',
               rows[-1]['vel_n_mps'] not in (None, '') and rows[-1]['vel_e_mps'] not in (None, ''),
               f"{rows[-1]['vel_n_mps']} / {rows[-1]['vel_e_mps']}")
+        check('CSV 含从天线列且有值（从天线 lat/used）',
+              rows[-1]['slave_lat'] not in (None, '') and rows[-1]['slave_sats_used'] not in (None, ''),
+              f"{rows[-1]['slave_lat']} / {rows[-1]['slave_sats_used']}")
 
         source = simulator.ReplaySource(raw_path, lambda line: None)
         check('回放源跳过注释行、行数一致', len(source._lines) == len(produced),
@@ -586,6 +589,53 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
           and len({e['port'] for e in sim_snap2['log_list']}) == 3,
           f"{len(sim_snap2['log_list'])} 条")
     check('模拟器 LOGLIST 指向 COM3', sim_snap2['active_module_port'] == 'COM3')
+
+    section('11. 从天线（Slave Antenna，H 后缀日志）')
+    # 厂家手册 §7.4：H 后缀是从天线版本，不是「高精度」。解析必须打上 antenna 标记，
+    # 且状态层分成主/从两套卫星表，不能互相覆盖。
+    check('$GPGSVH 识别为从天线 GSV',
+          (lambda p: p['kind'] == 'GSVH' and p['antenna'] == 'slave')(
+              nmea.parse('$GPGSVH,1,1,01,04,12,313,34*00')))
+    check('$GNGGAH 识别为从天线 GGA',
+          (lambda p: p['kind'] == 'GGAH' and p['antenna'] == 'slave')(
+              nmea.parse('$GNGGAH,120000.00,3029.48510,N,11421.57034,E,4,08,0.60,'
+                         '41.20,M,-8.20,M,1.2,0001*00')))
+    check('$GNGSAH 识别为从天线 GSA 且系统 ID 生效',
+          (lambda p: p['kind'] == 'GSAH' and p['antenna'] == 'slave'
+              and p['data']['system'] == 'BeiDou')(
+              nmea.parse('$GNGSAH,M,3,24,25,,,,,,,,,,,1.1,0.6,0.9,4*00')))
+    check('$GPGGA（主天线）antenna=master',
+          nmea.parse('$GPGGA,120000.00,,,,,0,00,9999.0,,,,,,*00')['antenna'] == 'master')
+
+    st10 = state_mod.GnssState()
+    # 主/从各自 2 颗，PRN 故意重叠（04/16）：若两套表混用，数量与 used 都会串。
+    st10.feed_line('$GPGSV,1,1,2,04,45,100,40,16,30,200,41')
+    st10.feed_line('$GPGSVH,1,1,2,04,44,101,38,16,29,201,39')
+    st10.feed_line('$GPGSA,M,3,04,16,,,,,,,,,,1.0,0.7,0.9,1')
+    st10.feed_line('$GPGSAH,M,3,04,,,,,,,,,,,1.1,0.8,1.0,1')
+    st10.feed_line('$GNGGAH,120000.00,3029.48510,N,11421.57034,E,4,08,0.60,41.20,M,-8.20,M,1.2,0001')
+    st10.feed_line('$GNRMCH,120000.00,A,3029.48510,N,11421.57034,E,1.50,45.0,021026,,,A')
+    st10.feed_line('$GNGSTH,120000.00,0.50,0.30,0.20,45.0,0.010,0.011,0.020')
+    snap10 = st10.snapshot()
+    check('从天线日志不再计入 unknown', st10.unknown_count == 0, str(st10.unknown_count))
+    check('主/从天线各 2 颗，互不混入',
+          snap10['satellites']['tracked'] == 2 and snap10['slave']['satellites']['tracked'] == 2)
+    check('主天线 used 来自 GSA，从天线 used 来自 GSAH',
+          snap10['satellites']['used'] == 2 and snap10['slave']['satellites']['used'] == 1
+          and snap10['satellites']['used_source'] == 'GSA'
+          and snap10['slave']['satellites']['used_source'] == 'GSAH')
+    check('从天线定位/速度/精度已解析',
+          snap10['slave']['present'] is True
+          and abs(snap10['slave']['position']['lat'] - 30.4914183) < 1e-6
+          and snap10['slave']['velocity']['speed_kn'] == 1.5
+          and snap10['slave']['velocity']['course_deg'] == 45.0
+          and snap10['slave']['accuracy']['std_lat'] == 0.01)
+    # 模拟器必须产出从天线数据，界面「从天线」面板才能被验证
+    check('模拟器产出从天线 36 颗且参与解算',
+          sim_snap['slave']['present'] is True
+          and sim_snap['slave']['satellites']['tracked'] == 36
+          and sim_snap['slave']['satellites']['used'] == 36,
+          str(sim_snap['slave']['satellites']['used']))
 
     print()
     if FAILURES:

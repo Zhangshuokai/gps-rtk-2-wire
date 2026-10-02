@@ -77,13 +77,18 @@ $CONFIG,COM1,CONFIG COM1 115200
 | `GPGGA` | 0.1 s | `$GNGGA` | **定位**：经纬高/解质量/卫星数/HDOP |
 | `GPRMC` | 0.1 s | `$GNRMC` | 时间/日期/速度/航迹角 |
 | `GNGSV` | 1 s | `$GPGSV` | 卫星仰角/方位角/C-N0 |
-| `GNGSVH` | 1 s | `$GPGSVH` | 同上，厂家高精度扩展（**仅配在 COM3**） |
+| `GNGSVH` | 1 s | `$GPGSVH` | **从天线**（Slave Antenna）的卫星视图（**仅配在 COM3**） |
 | `AGRICA` | 0.1 s | `#AGRICA` | 厂家农业专用大包，**占大量带宽且本程序不用**，建议关闭 |
 
 > 注意两个易错点：
 > 1. **配置用的日志名与实际发出的语句 talker 不同**：配 `GPGGA` 发 `$GNGGA`，配 `GNGSV` 发 `$GPGSV`。
 >    写预设时要用配置名（`GPGGA`/`GPRMC`/`GNGSV`），不要用 `GNGGA`/`GPGSV`。
 > 2. `GNGSVH` 只配在 COM3 上，这条线索可用于判断**本连接到底位于模块的哪个串口**（见 §3）。
+>
+> **`H` 后缀 = 从天线（Slave Antenna），不是「高精度」**（厂家手册 §7.4）：
+> `$--GGAH / $--RMCH / $--GSAH / $--GSVH / $--GSTH` 都是从天线版本。本程序把它们
+> 与主天线**分开**解析和显示（界面「从天线（Slave Antenna）」面板），互不覆盖。
+> 完整从天线日志用「标准遥测输出」预设开启（`GPGGAH/GPRMCH/GPGSAH/GNGSVH/GPGSTH`）。
 
 ### 2.3 GSA / VTG 的配置名带 `GP` 前缀（易错）
 
@@ -104,6 +109,7 @@ $CONFIG,COM1,CONFIG COM1 115200
 
 被识别：`RANGEA`、`SATVISA`、`SATSINFOA`、`SATINFOA`、`BESTVELA`、`PSRPOSA`、`PSRVELA`、
 `PVTSLNA`、`BESTPOSA`、`GPGSVH`、`UNIHEADINGA`、`UNIHEADINGB`、`HEADINGA`、`HEADINGB`、`LOGLIST`。
+NMEA 侧另支持从天线版本 `$--GGAH / $--GLLH / $--GNSH / $--GRSH / $--GSAH / $--GSTH / $--GSVH / $--RMCH / $--VTGH`。
 
 ### 2.5 命令必须**不带** `#` / `$` 前缀
 
@@ -205,7 +211,8 @@ ID6=`pitch` ±90°、ID8=`hdgstddev`、ID9=`ptchstddev`；并对照 `pyunigps` �
 | 定位信息 | 经纬高、解质量、参与解算卫星数、HDOP、差分龄期、UTC、速度、航迹角 |
 | 卫星星空图 | 极坐标图，按系统着色，圆点大小对应 C/N0，实心=参与解算 |
 | 信噪比 C/N0 | 逐星横向柱状图，带 10 dB-Hz 网格 |
-| 卫星列表 | 系统/PRN/仰角/方位角/C/N0/是否参与解算 |
+| 卫星列表 | 主天线：系统/PRN/仰角/方位角/C/N0/是否参与解算 |
+| 从天线（Slave Antenna） | H 后缀日志：从天线定位（`$GNGGAH`）、速度（`$GNRMCH`）、精度（`$GNGSTH`）、以及从天线自己的卫星表与逐星「参与解算」（`$GNGSAH`）；与主天线完全独立 |
 | 状态提示 | 自动诊断：无定位、无航向、字段顺序不一致、校验和错误、链路中断… |
 | 设备信息 | 型号/固件/序列号/日期/模式/模块串口 + 模块配置（20 项） |
 | 模块日志配置 | 来自模块 `LOGLIST` 回显：**逐端口列出模块当前真实在输出的日志与周期**，本连接所在端口高亮标 `←`。这是判断「双天线定向/定位日志是否真的开启」和「连的是模块哪个串口」的权威依据 |
@@ -225,7 +232,8 @@ ID6=`pitch` ±90°、ID8=`hdgstddev`、ID9=`ptchstddev`；并对照 `pyunigps` �
 | `data_YYYYmmdd_HHMMSS.csv` | 解析后的结构化数据（UTF-8 带 BOM，Excel 直接打开不乱码） |
 
 CSV 列：时间、经纬高、解质量、卫星数、HDOP、**航向/航向来源/俯仰/基线长度/解状态**、
-航向与俯仰标准差、航向交叉校验差值、速度、航迹角、跟踪/参与解算卫星数、最大 C/N0。
+航向与俯仰标准差、航向交叉校验差值、速度、航迹角、跟踪/参与解算卫星数、最大 C/N0，
+以及从天线列（`slave_lat/lon/alt/fix/sats_used/speed_kn/course_deg/std_lat/std_lon/std_alt`）。
 
 ---
 
@@ -253,7 +261,7 @@ CSV 列：时间、经纬高、解质量、卫星数、HDOP、**航向/航向来
 gps-rtk/
 ├── app/
 │   ├── protocol/
-│   │   ├── nmea.py         # NMEA 0183 解析（GGA/RMC/GSV/GSVH/GSA/THS/VTG/GLL/ZDA/GST/HDT）
+│   │   ├── nmea.py         # NMEA 0183 解析（GGA/RMC/GSV/GSA/THS/VTG/GLL/ZDA/GST/HDT + 从天线 H 后缀）
 │   │   ├── unicore.py      # Unicore ASCII 解析 + 命令构造 + 预设
 │   │   └── state.py        # 状态汇聚、速率统计、诊断告警
 │   ├── serial_link.py      # 串口枚举/打开/读写线程/自动重连/二进制垃圾丢弃

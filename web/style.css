@@ -97,6 +97,11 @@ h1, h2 { margin: 0; font-weight: 600; }
   padding: 14px;
 }
 
+/* 从天线（Slave Antenna，H 后缀日志）面板：左侧用一条强调色与主天线区分 */
+.slave-card {
+  border-left: 3px solid rgba(192, 132, 252, .65);
+}
+
 .card h2 {
   font-size: 14px;
   color: var(--fg-dim);

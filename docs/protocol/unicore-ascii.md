@@ -118,7 +118,7 @@ sol_status, pos_type, 基线长度(m), 航向(°), 俯仰(°), 保留, 航向σ(
 | `BESTNAVA` | 厂家手册中确有末尾速度字段，但**本机 `help` 未确认支持该日志名**（实测识别到的是 `BESTVELA`）；按「不实现硬件不支持的功能」不解析 |
 | `PSRVELA` | 实机**确实输出**（真实抓包 `fixtures/psrvela_real.txt`，无解时速度全 0），但厂家手册 N4 R1.4/R1.13 与 `pyunigps` 均**未定义该日志**（手册里的 `PSRVEL` 只是 `CONFIG SMOOTH`/`PSRVELDRPOS` 配置项）；仅 NovAtel 同名日志可作线索，**不足以确证 Unicore 字段含义** → 不解析，界面「天」保持 `—`（见 §6.5） |
 | `AGRICA` | 农业大包，10 Hz 占大量带宽，本程序不用，建议 `UNLOG` |
-| `GNGSVH` | 厂家高精度 GSV 扩展，仅配在 COM3 |
+| `GNGSVH` | 从天线（Slave Antenna）GSV，实发 `$GPGSVH`，仅配在 COM3 |
 
 ## 6.5 `PVTSLNA`（位置速度，北/东速度）
 

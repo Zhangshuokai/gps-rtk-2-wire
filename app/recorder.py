@@ -18,6 +18,10 @@ CSV_COLUMNS = [
     'speed_kn', 'speed_kmh', 'course_deg',
     'vel_n_mps', 'vel_e_mps', 'vel_u_mps',
     'sats_tracked', 'sats_used', 'max_cn0',
+    # 从天线（Slave Antenna，H 后缀日志）自有解
+    'slave_lat', 'slave_lon', 'slave_alt', 'slave_fix', 'slave_sats_used',
+    'slave_speed_kn', 'slave_course_deg',
+    'slave_std_lat', 'slave_std_lon', 'slave_std_alt',
 ]
 
 
@@ -230,6 +234,11 @@ class Recorder:
         ths = heading.get('ths') or {}
         velocity = snapshot.get('velocity') or {}
         sats = snapshot.get('satellites') or {}
+        slave = snapshot.get('slave') or {}
+        slave_position = slave.get('position') or {}
+        slave_velocity = slave.get('velocity') or {}
+        slave_sats = slave.get('satellites') or {}
+        slave_accuracy = slave.get('accuracy') or {}
         return {
             'recorded_at': datetime.now(timezone.utc).isoformat(timespec='milliseconds'),
             'utc': velocity.get('utc'),
@@ -263,4 +272,14 @@ class Recorder:
             'sats_tracked': sats.get('tracked'),
             'sats_used': sats.get('used'),
             'max_cn0': sats.get('max_cn0'),
+            'slave_lat': slave_position.get('lat'),
+            'slave_lon': slave_position.get('lon'),
+            'slave_alt': slave_position.get('alt'),
+            'slave_fix': slave_position.get('quality_text'),
+            'slave_sats_used': slave_sats.get('used'),
+            'slave_speed_kn': slave_velocity.get('speed_kn'),
+            'slave_course_deg': slave_velocity.get('course_deg'),
+            'slave_std_lat': slave_accuracy.get('std_lat'),
+            'slave_std_lon': slave_accuracy.get('std_lon'),
+            'slave_std_alt': slave_accuracy.get('std_alt'),
         }

@@ -147,6 +147,43 @@
       </div>
     </section>
 
+    <section class="card slave-card">
+      <h2>从天线（Slave Antenna）
+        <span class="badge" id="slaveBadge">—</span>
+      </h2>
+      <p class="hint">
+        H 后缀日志（<code>$--GGAH / $--RMCH / $--GSAH / $--GSVH / $--GSTH</code>）来自<strong>从天线</strong>，
+        与主天线各自独立。厂家手册 §7.4 定义；未开启对应日志时此处为空。
+      </p>
+      <div class="pos-grid">
+        <div class="pos-item"><span class="k">纬度</span><span class="v mono" id="slaveLat">—</span></div>
+        <div class="pos-item"><span class="k">经度</span><span class="v mono" id="slaveLon">—</span></div>
+        <div class="pos-item"><span class="k">椭球高</span><span class="v mono" id="slaveAlt">—</span></div>
+        <div class="pos-item"><span class="k">定位卫星</span><span class="v mono" id="slaveSv">—</span></div>
+        <div class="pos-item"><span class="k">参与解算</span><span class="v mono" id="slaveUsed">—</span></div>
+        <div class="pos-item"><span class="k">HDOP</span><span class="v mono" id="slaveHdop">—</span></div>
+        <div class="pos-item"><span class="k">UTC 时间</span><span class="v mono" id="slaveUtc">—</span></div>
+        <div class="pos-item"><span class="k">地面速度</span><span class="v mono" id="slaveSpeed">—</span></div>
+        <div class="pos-item"><span class="k">地面航迹角</span><span class="v mono" id="slaveCourse">—</span></div>
+        <div class="pos-item"><span class="k">定位来源</span><span class="v" id="slaveSource">—</span></div>
+      </div>
+      <table class="kv-table">
+        <tbody>
+          <tr><th>GST RMS</th><td id="slaveRms">—</td></tr>
+          <tr><th>纬度 σ / 经度 σ</th><td id="slaveStdLatLon">—</td></tr>
+          <tr><th>高程 σ</th><td id="slaveStdAlt">—</td></tr>
+        </tbody>
+      </table>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>系统</th><th>PRN</th><th>仰角</th><th>方位角</th><th>C/N0</th><th id="slaveSatUsedHeader">参与解算</th></tr>
+          </thead>
+          <tbody id="slaveSatTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
   </div>
 
   <!-- ============ 右列 ============ -->

@@ -233,6 +233,12 @@ class Simulator:
             self._emit_rmc(now)
             self._emit_gsv(elapsed)
             self._emit_gsa()
+            # 从天线（Slave Antenna，H 后缀）：主/从各自独立的定位、速度、卫星与解。
+            self._emit_ggah(now, heading)
+            self._emit_rmch(now, heading)
+            self._emit_gsvh(elapsed)
+            self._emit_gsah()
+            self._emit_gsth(now)
 
         status = 'A'
         self._emit_line(_sentence(f'GPTHS,{heading:.4f},{status}'))
@@ -297,22 +303,26 @@ class Simulator:
             f'{speed_kn:.2f},{self._ground_course_deg:.1f},{now.strftime("%d%m%y")},,,A'
         ))
 
-    def _emit_gsv(self, elapsed: float) -> None:
+    def _emit_gsv(self, elapsed: float, suffix: str = 'GSV', cn0_offset: float = 0.0) -> None:
+        """``suffix`` 为 GSV 时是主天线，为 GSVH 时是从天线（C/N0 略低）。"""
         for talker, satellites in self.constellations.items():
             groups = []
             for sat in satellites:
                 elevation = max(4.0, min(89.0, sat['elev'] + 3.0 * math.sin(elapsed / 40.0 + sat['phase'])))
                 azimuth = (sat['azim'] + elapsed * sat['drift']) % 360.0
-                cn0 = max(25.0, min(52.0, sat['cn0'] + 3.0 * math.sin(elapsed / 13.0 + sat['phase'])))
+                cn0 = max(25.0, min(52.0, sat['cn0'] + cn0_offset + 3.0 * math.sin(elapsed / 13.0 + sat['phase'])))
                 groups.append(f'{sat["prn"]:02d},{elevation:02.0f},{azimuth:03.0f},{cn0:02.0f}')
             total = (len(groups) + 3) // 4
             for index in range(total):
                 chunk = groups[index * 4:(index + 1) * 4]
                 self._emit_line(_sentence(
-                    f'{talker}GSV,{total},{index + 1},{len(satellites)},' + ','.join(chunk)
+                    f'{talker}{suffix},{total},{index + 1},{len(satellites)},' + ','.join(chunk)
                 ))
 
-    def _emit_gsa(self) -> None:
+    def _emit_gsvh(self, elapsed: float) -> None:
+        self._emit_gsv(elapsed, suffix='GSVH', cn0_offset=-1.5)
+
+    def _emit_gsa(self, suffix: str = 'GSA', dop: tuple[str, str, str] = ('1.12', '0.62', '0.93')) -> None:
         for talker, satellites in self.constellations.items():
             slots = [f'{s["prn"]:02d}' for s in satellites[:12]]
             slots += [''] * (12 - len(slots))
@@ -320,8 +330,44 @@ class Simulator:
             # 若这里写死 '1'，所有星座的「参与解算」都会被标到 GPS 上。
             system_id = nmea.GSA_ID_BY_SYSTEM.get(self.system_names.get(talker, ''), '')
             self._emit_line(_sentence(
-                f'{talker}GSA,A,3,' + ','.join(slots) + f',1.12,0.62,0.93,{system_id}'
+                f'{talker}{suffix},A,3,' + ','.join(slots) + f',{dop[0]},{dop[1]},{dop[2]},{system_id}'
             ))
+
+    def _emit_gsah(self) -> None:
+        self._emit_gsa(suffix='GSAH', dop=('1.10', '0.60', '0.92'))
+
+    def _slave_coords(self, heading_deg: float) -> tuple[str, str, str, str]:
+        """从天线相位中心 = 主天线沿航向偏移一个基线长度（本地切平面近似）。"""
+        radians = math.radians(heading_deg)
+        north = BASELINE_LENGTH_M * math.cos(radians)
+        east = BASELINE_LENGTH_M * math.sin(radians)
+        lat = BASE_LAT + north / 111320.0
+        lon = BASE_LON + east / (111320.0 * math.cos(math.radians(BASE_LAT)))
+        lat_text, lat_hemi = _nmea_coord(lat, True)
+        lon_text, lon_hemi = _nmea_coord(lon, False)
+        return lat_text, lat_hemi, lon_text, lon_hemi
+
+    def _emit_ggah(self, now: datetime, heading: float) -> None:
+        lat, lat_hemi, lon, lon_hemi = self._slave_coords(heading)
+        self._emit_line(_sentence(
+            f'GNGGAH,{now.strftime("%H%M%S")}.00,{lat},{lat_hemi},{lon},{lon_hemi},4,34,0.58,'
+            f'41.900,M,-8.234,M,1.2,0001'
+        ))
+
+    def _emit_rmch(self, now: datetime, heading: float) -> None:
+        lat, lat_hemi, lon, lon_hemi = self._slave_coords(heading)
+        speed_kn = self._ground_speed_mps * 1.943844  # m/s -> kn
+        self._emit_line(_sentence(
+            f'GNRMCH,{now.strftime("%H%M%S")}.00,A,{lat},{lat_hemi},{lon},{lon_hemi},'
+            f'{speed_kn:.2f},{self._ground_course_deg:.1f},{now.strftime("%d%m%y")},,,A'
+        ))
+
+    def _emit_gsth(self, now: datetime) -> None:
+        heading_sigma = 0.08 + 0.02 * abs(math.sin(now.timestamp() / 7.0))
+        self._emit_line(_sentence(
+            f'GNGSTH,{now.strftime("%H%M%S")}.00,0.42,0.25,0.18,45.0,'
+            f'{heading_sigma:.3f},0.011,0.020'
+        ))
 
     def _handle_command(self, text: str) -> None:
         command = text.strip()

@@ -77,7 +77,7 @@ const MAX_ACK_LINES = 200;
 
 // 分区渲染缓存：快照是 5Hz 推的，但卫星/告警/设备等数据变化慢得多，
 // 不做变更检测会让 36 行表格和 3 个画布每秒重画 5 次。
-const sectionCache = { satellites: '', alerts: '', device: '', logList: '' };
+const sectionCache = { satellites: '', alerts: '', device: '', logList: '', slave: '' };
 const SAT_RENDER_INTERVAL_MS = 400;
 let lastSatRender = 0;
 let pitchTrackWidth = 0;
@@ -584,21 +584,22 @@ function drawSnrChart() {
 
 /* ============================ 卫星表 ============================ */
 
-function renderSatTable() {
-  const satellites = (snapshot && snapshot.satellites) || {};
+// 主/从天线共用同一套表格渲染（列结构一致，只有 tbody/表头 id 不同）
+function renderSatTableInto(bodyId, headerId, satellites, emptyText) {
   const list = satellites.list || [];
   const usedAvailable = satellites.used_source != null;
-  const header = $('satUsedHeader');
+  const header = $(headerId);
   if (header) {
     header.textContent = usedAvailable ? '参与解算' : '参与解算（GSA 未开启）';
-    header.title = usedAvailable ? '' : '本模块支持 GSA（配置名 GPGSA），当前端口未开启该日志；用预设「标准遥测输出」即可开启';
+    header.title = usedAvailable ? '' : '本模块支持 GSA（配置名 GPGSA/GPGSAH），当前端口未开启该日志；用预设「标准遥测输出」即可开启';
   }
-  const body = $('satTableBody');
+  const body = $(bodyId);
+  if (!body) return;
   if (!list.length) {
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#5b6f8c">暂无卫星数据</td></tr>';
+    body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#5b6f8c">${esc(emptyText)}</td></tr>`;
     return;
   }
-  const rows = list.map((sat) => {
+  body.innerHTML = list.map((sat) => {
     const color = systemColor(sat.system);
     const used = !usedAvailable
       ? '<span class="used-no">—</span>'
@@ -612,8 +613,47 @@ function renderSatTable() {
       <td>${fmt(sat.cn0, 1)}</td>
       <td>${used}</td>
     </tr>`;
-  });
-  body.innerHTML = rows.join('');
+  }).join('');
+}
+
+function renderSatTable() {
+  renderSatTableInto('satTableBody', 'satUsedHeader',
+    (snapshot && snapshot.satellites) || {}, '暂无卫星数据');
+}
+
+function renderSlave() {
+  const slave = (snapshot && snapshot.slave) || {};
+  const position = slave.position || null;
+  const velocity = slave.velocity || {};
+  const accuracy = slave.accuracy || {};
+  const sats = slave.satellites || {};
+
+  setBadge($('slaveBadge'),
+    slave.present ? `${sats.tracked || 0} 颗 / 参与解算 ${sats.used || 0}` : '无数据',
+    slave.present ? '' : 'warn');
+
+  const lat = position && position.lat;
+  const lon = position && position.lon;
+  $('slaveLat').textContent = lat === null || lat === undefined ? DASH : Number(lat).toFixed(7);
+  $('slaveLon').textContent = lon === null || lon === undefined ? DASH : Number(lon).toFixed(7);
+  $('slaveAlt').textContent = position && position.alt != null ? `${Number(position.alt).toFixed(3)} m` : DASH;
+  $('slaveSv').textContent = position && position.num_sv != null ? position.num_sv : DASH;
+  $('slaveUsed').textContent = sats.used_source != null ? (sats.used || 0) : DASH;
+  $('slaveHdop').textContent = fmt(position && position.hdop, 2);
+  $('slaveUtc').textContent = formatUtc(velocity.utc, velocity.date);
+  const speedKmh = velocity.speed_kmh;
+  $('slaveSpeed').textContent = speedKmh == null ? DASH : `${Number(speedKmh).toFixed(2)} km/h`;
+  $('slaveCourse').textContent = velocity.course_deg == null ? DASH : `${Number(velocity.course_deg).toFixed(2)}°`;
+  $('slaveSource').textContent = position && position.source ? position.source : DASH;
+  $('slaveSource').title = position && position.stale
+    ? `数据已超过 ${limitOf('stale_after_s', 2)} 秒未更新` : '';
+
+  $('slaveRms').textContent = accuracy.rms == null ? DASH : fmt(accuracy.rms, 2);
+  $('slaveStdLatLon').textContent = (accuracy.std_lat == null && accuracy.std_lon == null)
+    ? DASH : `${fmt(accuracy.std_lat, 3)} / ${fmt(accuracy.std_lon, 3)}`;
+  $('slaveStdAlt').textContent = accuracy.std_alt == null ? DASH : fmt(accuracy.std_alt, 3);
+
+  renderSatTableInto('slaveSatTableBody', 'slaveSatUsedHeader', sats, '未收到从天线 GSV（H 后缀）');
 }
 
 /* ============================ 告警 / 设备 / 记录 ============================ */
@@ -807,6 +847,18 @@ function logListSignature() {
     + list.map((e) => `${e.port}:${e.name}:${e.period_s}`).join(',');
 }
 
+function slaveSignature() {
+  const slave = (snapshot && snapshot.slave) || {};
+  const sats = slave.satellites || {};
+  const position = slave.position || {};
+  const velocity = slave.velocity || {};
+  const accuracy = slave.accuracy || {};
+  return [slave.present ? 1 : 0, sats.tracked, sats.used, sats.max_cn0,
+    position.lat, position.lon, position.alt, position.num_sv, position.hdop, position.source,
+    velocity.speed_kmh, velocity.course_deg, velocity.utc,
+    accuracy.rms, accuracy.std_lat, accuracy.std_lon, accuracy.std_alt].join('|');
+}
+
 // 模块 LOGLIST：当前真实在输出的日志集合（判断定向/定位日志是否开启的权威依据）
 function renderLogList() {
   const list = (snapshot && snapshot.log_list) || [];
@@ -924,6 +976,7 @@ function renderAll() {
   setIfChanged('alerts', alertsSignature(), renderAlerts);
   setIfChanged('device', deviceSignature(), renderDevice);
   setIfChanged('logList', logListSignature(), renderLogList);
+  setIfChanged('slave', slaveSignature(), renderSlave);
 }
 
 function handleEvent(event) {

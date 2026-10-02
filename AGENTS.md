@@ -62,7 +62,8 @@ python tests\test_e2e.py                  :: 唯一的测试入口
    `help VTG` 报 not found，但 **`help GPGSA` / `help GPVTG` 均有效**；
    `LOG <port> GPGSA ONTIME <s>` 实发 `$GNGSA`（每星座一条，末尾为 NMEA 4.11 系统 ID）。
    本程序**已能解析** GSA 并据此标记逐星「参与解算」（`satellites.used_source == 'GSA'`），
-   「标准遥测输出」预设已含该命令。**同一星座入解超过 12 颗时，模块按 SysID 拆成多条**
+   「标准遥测输出」预设已含该命令（并含从天线 `GPGGAH/GPRMCH/GPGSAH/GNGSVH/GPGSTH`，见第 9 条）。
+   **同一星座入解超过 12 颗时，模块按 SysID 拆成多条**
    `$GNGSA`（厂家手册 Table 7-22 的 BDS 示例即两行），同一轮的多条必须**取并集**
    （`state.GnssState._merge_gsa` 用 `GSA_EPOCH_GAP_S` 归并），不能后一条覆盖前一条。
    **不要再用裸名 `GSA` 判断能力**——`$--GSA` 缺失
@@ -99,6 +100,11 @@ python tests\test_e2e.py                  :: 唯一的测试入口
    talker 可能是分星座的（`GB`/`GP`），也可能是组合的；不确定时靠 **PRN 号段**推断
    （`nmea.system_from_prn`），推断结果在前端标 `*`。未知/异常 talker 一律归为 `?`
    （`nmea.system_of`）——talker 来自不可信串口字节，是注入面。
+   **H 后缀 = 从天线（Slave Antenna），不是「高精度」**（厂家手册 §7.4：
+   `GPGGAH/GPGSAH/GPGSVH/GPRMCH/GPGSTH`…）。**不要把 `$--GSVH` 当主天线的高精度 GSV 合并**：
+   `GnssState` 用 `_AntennaBus` 给主/从各一套 `sats/gsv_sets/gsa_*`，`nmea.parse` 结果带
+   `antenna` 字段区分；从天线定位/速度/精度与卫星汇入快照的 `slave` 段，前端有独立
+   「从天线（Slave Antenna）」面板。改这一层时主/从两套都要能跑。
 10. 解析的是**不可信输入**：`nmea._float` 必须拒绝非有限值（`nan`/`inf`/`1e400`，
     `int(inf)` 会抛 OverflowError）；`serial_link._handle_raw_line` 外层必须兜住异常。
     实测 `$GNGGA,000000,nan,N,...` 和 `$GNGGA,,,,,,1e400,...` 会真的抛异常并杀死读线程。

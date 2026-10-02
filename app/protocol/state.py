@@ -28,7 +28,8 @@ GSA_EPOCH_GAP_S = 0.5
 RATE_KINDS = {
     'UNIHEADINGA', 'UNIHEADINGB', 'UNIHEADING2', 'HEADINGA', 'HEADINGB', 'HEADING2',
     'AGRICA', 'VERSION', 'MODE', 'PVTSLNA', 'PVTSLNB', 'BESTPOSA', 'BESTPOSB',
-    'GGA', 'GNS', 'RMC', 'GSV', 'GSVH', 'GSA', 'THS', 'HDT', 'VTG', 'GLL', 'ZDA', 'GST',
+    'GGA', 'GNS', 'RMC', 'GSV', 'GSVH', 'GSA', 'GSAH', 'THS', 'HDT', 'VTG', 'VTGH',
+    'GLL', 'GLLH', 'ZDA', 'GST', 'GSTH', 'GGAH', 'GNSH', 'GRSH', 'GGR',
     'ack', 'config', 'other', 'loglist',
 }
 
@@ -53,6 +54,27 @@ def _now() -> float:
     return time.monotonic()
 
 
+class _AntennaBus:
+    """单副天线的卫星 / GSV / GSA 累积状态。
+
+    主天线与从天线（H 后缀日志）各持一份，避免把两副天线的可见卫星与
+    「参与解算」互相覆盖。
+    """
+
+    def __init__(self) -> None:
+        self.sats: dict[tuple[str, int | None], dict] = {}
+        self.sat_at: dict[str, float] = {}
+        self.gsv_meta: dict[str, dict] = {}
+        # 按 (星座, 信号频点, 日志种类) 累积的 PRN 集合。Unicore 的 GSV 会按信号频点分行
+        # （每条都写 total=1,index=1），不能只看 index==1 就清空整颗星座。
+        self.gsv_sets: dict[tuple[str, str | None, str], set] = {}
+        self.gsa_seen: int = 0
+        # 按星座累积「参与解算」的 PRN：同一星座可能有多条 GSA（>12 颗入解），
+        # 需在同一轮内取并集，跨轮次再重置。
+        self.gsa_used: dict[str, set[int]] = {}
+        self.gsa_at: dict[str, float] = {}
+
+
 class GnssState:
     def __init__(self, heading_swap: bool = False, raw_keep: int = 300):
         self.lock = threading.RLock()
@@ -75,11 +97,9 @@ class GnssState:
         self.active_module_port: str | None = None
         self.log_list: list[dict] = []
         self.log_list_at: float | None = None
-        self.gsa_seen: int = 0
-        # 按星座累积「参与解算」的 PRN：同一星座可能有多条 GSA（>12 颗入解），
-        # 需在同一轮内取并集，跨轮次再重置。
-        self.gsa_used: dict[str, set[int]] = {}
-        self.gsa_at: dict[str, float] = {}
+        # 主/从天线各一套卫星、GSV 累积与 GSA「参与解算」状态。
+        self.master = _AntennaBus()
+        self.slave = _AntennaBus()
 
         self.gga: dict | None = None
         self.gga_at: float | None = None
@@ -95,12 +115,14 @@ class GnssState:
         self.heading_frame: dict | None = None
         self.heading_at: float | None = None
 
-        self.sats: dict[tuple[str, int | None], dict] = {}
-        self.sat_at: dict[str, float] = {}
-        self.gsv_meta: dict[str, dict] = {}
-        # 按 (星座, 信号频点, 日志种类) 累积的 PRN 集合。Unicore 的 GSV 会按信号频点分行
-        # （每条都写 total=1,index=1），不能只看 index==1 就清空整颗星座。
-        self.gsv_sets: dict[tuple[str, str | None, str], set] = {}
+        # 从天线（Slave Antenna，H 后缀日志）自有的定位/速度/精度，主天线状态不受影响。
+        self.gga_h: dict | None = None
+        self.gga_h_at: float | None = None
+        self.rmc_h: dict | None = None
+        self.vtg_h: dict | None = None
+        self.gst_h: dict | None = None
+        self.gst_h_at: float | None = None
+        self.grs_h: dict | None = None
 
         self.checksum_errors = 0
         self.checksum_checked = 0
@@ -196,17 +218,53 @@ class GnssState:
                 self.gga_at = _now()
             return None
 
+        if kind == 'GGAH':
+            self.gga_h = data
+            self.gga_h_at = _now()
+            return None
+
+        if kind == 'GNSH':
+            if self.gga_h is None:
+                self.gga_h = data
+                self.gga_h_at = _now()
+            return None
+
+        if kind == 'GLLH':
+            # 从天线 GLL 与 GGAH 位置重复，无需单列存储（与主天线 GLL 同样不入快照）
+            return None
+
         if kind == 'RMC':
             self.rmc = data
             self.rmc_at = _now()
             return None
 
-        if kind in ('GSV', 'GSVH'):
-            self._merge_gsv(kind, data)
+        if kind == 'RMCH':
+            self.rmc_h = data
+            return None
+
+        if kind == 'GSV':
+            self._merge_gsv(self.master, kind, data)
+            return None
+
+        if kind == 'GSVH':
+            self._merge_gsv(self.slave, kind, data)
             return None
 
         if kind == 'GSA':
-            self._merge_gsa(data)
+            self._merge_gsa(self.master, data)
+            return None
+
+        if kind == 'GSAH':
+            self._merge_gsa(self.slave, data)
+            return None
+
+        if kind == 'GSTH':
+            self.gst_h = data
+            self.gst_h_at = _now()
+            return None
+
+        if kind == 'GRSH':
+            self.grs_h = data
             return None
 
         if kind == 'THS':
@@ -229,6 +287,10 @@ class GnssState:
             self.vtg = data
             return None
 
+        if kind == 'VTGH':
+            self.vtg_h = data
+            return None
+
         return None
 
     def _feed_loglist(self, line: str) -> None:
@@ -248,7 +310,7 @@ class GnssState:
             self.log_list.append(entry)
             self.log_list_at = _now()
 
-    def _merge_gsv(self, kind: str, data: dict) -> None:
+    def _merge_gsv(self, bus: _AntennaBus, kind: str, data: dict) -> None:
         sats = data['sats']
         # 一句组合 GSV（如 $GPGSV）里可能同时含多个星座的卫星，
         # 因此不能只看第一颗卫星的 system 来决定清理范围。
@@ -257,43 +319,43 @@ class GnssState:
         index = data.get('index')
         now = _now()
         for system in systems:
-            self.gsv_meta[system] = {
+            bus.gsv_meta[system] = {
                 'total': data.get('total'),
                 'index': index,
                 'in_view': data.get('in_view'),
             }
-            self.sat_at[system] = now
+            bus.sat_at[system] = now
             frame_prns = {sat['prn'] for sat in sats if sat['system'] == system}
-            # 键含日志种类：GSV 与 GSVH 是两条独立日志，不能互相替换
+            # 键含日志种类：即便某天同一副天线同时开 GSV/GSVH，也不会互相替换。
             key = (system, signal, kind)
             # index==1 表示该 (星座, 信号, 日志) 新一轮开始，整集替换；同一轮的多条则追加。
             # Unicore 按信号频点分行时每条都是 index==1，各自替换自己的信号集，
             # 不同频点的卫星不会被彼此清掉（旧实现只看 index==1 会清空整颗星座）。
-            if index == 1 or key not in self.gsv_sets:
-                self.gsv_sets[key] = set(frame_prns)
+            if index == 1 or key not in bus.gsv_sets:
+                bus.gsv_sets[key] = set(frame_prns)
             else:
-                self.gsv_sets[key].update(frame_prns)
+                bus.gsv_sets[key].update(frame_prns)
 
         # 某星座的存活 PRN = 其各信号集之并集；不在并集里的旧条目清掉。
         live: dict[str, set] = {}
-        for (system, _sig, _kind), prns in self.gsv_sets.items():
+        for (system, _sig, _kind), prns in bus.gsv_sets.items():
             live.setdefault(system, set()).update(prns)
-        for key in [k for k in self.sats if k[0] in live and k[1] not in live[k[0]]]:
-            del self.sats[key]
+        for key in [k for k in bus.sats if k[0] in live and k[1] not in live[k[0]]]:
+            del bus.sats[key]
 
         for sat in sats:
             key = (sat['system'], sat['prn'])
-            existing = self.sats.get(key)
+            existing = bus.sats.get(key)
             if existing and sat.get('elev') is None and existing.get('elev') is not None:
                 continue
             merged = dict(existing or {})
             merged.update({k: v for k, v in sat.items() if v is not None})
             merged.setdefault('used', False)
-            self.sats[key] = merged
+            bus.sats[key] = merged
 
-    def _merge_gsa(self, data: dict) -> None:
+    def _merge_gsa(self, bus: _AntennaBus, data: dict) -> None:
         system = data.get('system')
-        self.gsa_seen += 1
+        bus.gsa_seen += 1
         # GSA 的 PRN 是零填充字符串（'01'），而 GSV 解析出的是整数（1），统一按整数比较
         used_prns = set()
         for token in data.get('prns', []):
@@ -305,19 +367,19 @@ class GnssState:
         # 此时按 PRN 跨星座匹配，否则「参与解算」会永远为空。
         match_any = system in (None, '', '?', 'GNSS')
         if match_any:
-            for _key, sat in self.sats.items():
+            for _key, sat in bus.sats.items():
                 sat['used'] = sat.get('prn') in used_prns
             return
         # 一个星座入解卫星超过 12 颗时，模块按 SysID 拆成多条 GSA（厂家手册
         # Table 7-22 的 BDS 示例即两行）。同一轮的多条必须取并集；若后一条直接覆盖，
         # 只有最后一条的卫星会被标成「参与解算」。用到达间隔区分轮次（GSA 通常 1 Hz）。
         now = _now()
-        if now - self.gsa_at.get(system, 0.0) > GSA_EPOCH_GAP_S:
-            self.gsa_used[system] = set()
-        self.gsa_used[system] |= used_prns
-        self.gsa_at[system] = now
-        accumulated = self.gsa_used[system]
-        for key, sat in self.sats.items():
+        if now - bus.gsa_at.get(system, 0.0) > GSA_EPOCH_GAP_S:
+            bus.gsa_used[system] = set()
+        bus.gsa_used[system] |= used_prns
+        bus.gsa_at[system] = now
+        accumulated = bus.gsa_used[system]
+        for key, sat in bus.sats.items():
             if key[0] == system:
                 sat['used'] = sat.get('prn') in accumulated
 
@@ -388,7 +450,8 @@ class GnssState:
             position = self._build_position(now)
 
             heading = self._build_heading(now)
-            satellites = self._build_satellites(now)
+            satellites = self._build_satellites(self.master, now)
+            slave = self._build_slave(now)
             alerts = self._build_alerts(now, position, heading, satellites)
 
             rates = {
@@ -420,6 +483,7 @@ class GnssState:
                 'heading': heading,
                 'velocity': self._build_velocity(),
                 'satellites': satellites,
+                'slave': slave,
                 'alerts': alerts,
                 'limit': {
                     'heading_mismatch_deg': HEADING_MISMATCH_DEG,
@@ -551,17 +615,17 @@ class GnssState:
             'date': rmc.get('date'),
         }
 
-    def _build_satellites(self, now: float) -> dict:
+    def _build_satellites(self, bus: _AntennaBus, now: float, used_source: str = 'GSA') -> dict:
         # 星座长时间没有 GSV 就整批丢弃，避免残留幽灵星，并限制内部字典无限增长
-        stale = {s for s, at in self.sat_at.items() if now - at > GSV_STALE_S}
+        stale = {s for s, at in bus.sat_at.items() if now - at > GSV_STALE_S}
         if stale:
-            for key in [k for k in self.sats if k[0] in stale]:
-                del self.sats[key]
-            for key in [k for k in self.gsv_sets if k[0] in stale]:
-                del self.gsv_sets[key]
+            for key in [k for k in bus.sats if k[0] in stale]:
+                del bus.sats[key]
+            for key in [k for k in bus.gsv_sets if k[0] in stale]:
+                del bus.gsv_sets[key]
         sats = []
         by_system: defaultdict = defaultdict(lambda: {'total': 0, 'used': 0, 'max_cn0': None, 'systems': 0})
-        for (system, prn), sat in self.sats.items():
+        for (system, prn), sat in bus.sats.items():
             entry = dict(sat)
             entry['system'] = system
             entry['prn'] = prn
@@ -585,16 +649,60 @@ class GnssState:
             'tracked': tracked,
             'used': used,
             # 未收到 GSA 时「参与解算」无法判定，界面如实显示未知（不臆造）；
-            # 用预设「标准遥测输出」开启 LOG <port> GPGSA 即可（实发 $GNGSA）。
-            'used_source': 'GSA' if self.gsa_seen else None,
+            # 用预设「标准遥测输出」开启 LOG <port> GPGSA/GPGSAH 即可（实发 $GNGSA/$GNGSAH）。
+            'used_source': used_source if bus.gsa_seen else None,
             'system_source_inferred': inferred,
             'by_system': {
-                k: {'total': v['total'], 'used': v['used'], 'max_cn0': v['max_cn0'], 'in_view': self.gsv_meta.get(k, {}).get('in_view')}
+                k: {'total': v['total'], 'used': v['used'], 'max_cn0': v['max_cn0'], 'in_view': bus.gsv_meta.get(k, {}).get('in_view')}
                 for k, v in sorted(by_system.items())
             },
             'max_cn0': max(cn0s) if cn0s else None,
             'avg_cn0': None if not cn0s else round(sum(cn0s) / len(cn0s), 2),
-            'age_s': None if not self.sat_at else round(now - max(self.sat_at.values()), 3),
+            'age_s': None if not bus.sat_at else round(now - max(bus.sat_at.values()), 3),
+        }
+
+    def _build_slave(self, now: float) -> dict:
+        """从天线（Slave Antenna，H 后缀日志）的快照；没有数据时 present=False。"""
+        satellites = self._build_satellites(self.slave, now, used_source='GSAH')
+
+        position = None
+        if self.gga_h:
+            position = dict(self.gga_h)
+            position['age_s'] = round(now - self.gga_h_at, 3) if self.gga_h_at else None
+            position['stale'] = bool(position['age_s'] is not None and position['age_s'] > STALE_AFTER_S)
+            position['source'] = 'NMEA $GNGGAH'
+
+        rmc = self.rmc_h or {}
+        vtg = self.vtg_h or {}
+        speed_kn = rmc.get('speed_kn')
+        if speed_kn is None:
+            speed_kn = vtg.get('speed_kn')
+        course = rmc.get('course_deg')
+        if course is None:
+            course = vtg.get('course_deg')
+        velocity = {
+            'speed_kn': speed_kn,
+            'speed_kmh': None if speed_kn is None else round(speed_kn * 1.852, 3),
+            'course_deg': course,
+            'utc': (self.gga_h or {}).get('utc') or rmc.get('utc'),
+            'date': rmc.get('date'),
+        }
+
+        accuracy = None
+        if self.gst_h:
+            accuracy = dict(self.gst_h)
+            accuracy['age_s'] = round(now - self.gst_h_at, 3) if self.gst_h_at else None
+            accuracy['stale'] = bool(accuracy['age_s'] is not None and accuracy['age_s'] > STALE_AFTER_S)
+
+        present = bool(position or self.rmc_h or self.vtg_h or accuracy or self.grs_h
+                       or self.slave.gsa_seen or satellites['tracked'])
+        return {
+            'present': present,
+            'position': position,
+            'velocity': velocity,
+            'accuracy': accuracy,
+            'grs': self.grs_h,
+            'satellites': satellites,
         }
 
     def _build_alerts(self, now: float, position: dict | None, heading: dict, satellites: dict) -> list[dict]:
@@ -632,8 +740,8 @@ class GnssState:
                 '可先勾选「交换航向/俯仰字段」排除映射异常，再检查安装与数据时效。')
 
         if satellites['tracked'] == 0:
-            add('warn', '未收到卫星信息', '未解析到 $GPGSV / $GPGSVH 中的卫星。')
-        elif not self.gsa_seen:
+            add('warn', '未收到主天线卫星信息', '未解析到 $GPGSV 中的卫星。')
+        elif not self.master.gsa_seen:
             add('info', '未收到 GSA，「参与解算」暂时无法判定',
                 '本模块支持 GSA（配置名 GPGSA，实发 $GNGSA；实测 help GPGSA 有效），'
                 '但当前端口未开启该日志，故本项如实显示未知、不做臆造。'
