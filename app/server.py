@@ -263,6 +263,11 @@ class AppContext:
         command = text.strip()
         if not command:
             return {'ok': False, 'error': '命令为空'}
+        if '{PORT}' in command:
+            # 端口占位未解析：绝不能猜测/写死端口（COM1/COM3）发出去
+            return {'ok': False,
+                    'error': '目标端口未解析：命令里残留 {PORT}。请先连接并查询设备信息，'
+                             '从「模块串口」下拉框选定实际端口后再发送。'}
         payload = unicore.build_command(command, eol, checksum)
         sent = transport.send_bytes(payload)
         return {'ok': sent, 'sent': payload.decode('ascii', 'replace').strip(),

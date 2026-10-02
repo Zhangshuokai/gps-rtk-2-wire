@@ -687,18 +687,18 @@ function renderPresets() {
     button.onclick = () => {
       const hasPortToken = preset.commands.some((line) => line.includes('{PORT}'));
       const portToken = currentModulePort();
+      if (hasPortToken && !portToken) {
+        pushAck(`⚠ 不能载入预设「${preset.name}」：尚未读到模块自报的串口名。`
+          + '请先连接并点「查询设备信息」，再从「模块串口」下拉框确认实际目标端口——'
+          + '程序不猜测、不写死端口。');
+        return;
+      }
       const commands = preset.commands.map((line) => line.split('{PORT}').join(portToken));
       $('cmdText').value = commands.join('\n');
       pushAck(`已载入预设「${preset.name}」到命令框（${commands.length} 条）—— 请核对后点「发送」。`);
       pushAck(`  说明：${preset.note || ''}`);
       if (hasPortToken) {
-        const known = ((snapshot && snapshot.module_ports) || []).length > 0;
-        if (known) {
-          pushAck(`  ✓ LOG/UNLOG 的目标端口使用下拉框选择值：${portToken}`);
-        } else {
-          pushAck('  ⚠ 尚未读到模块自报的串口名（未连接或未点「查询设备信息」），暂用 COM1。'
-            + '请先连接并查询设备信息，再从「模块串口」下拉框确认目标端口。');
-        }
+        pushAck(`  ✓ LOG/UNLOG 的目标端口取实际值：${portToken}（来自 LOGLIST，未写死）`);
       }
       pushAck('  ⚠ 该预设会修改模块配置，请确认参数正确。');
     };
@@ -821,7 +821,19 @@ function renderModulePorts() {
   const select = $('modulePortSelect');
   const ports = ((snapshot && snapshot.module_ports) || []).slice();
   const active = snapshot && snapshot.active_module_port;
-  const options = ports.length ? ports : ['COM1'];
+  // 不猜测端口：未读到模块自报串口名时给出占位并禁用，避免写死 COM1/COM3 而发错端口
+  if (!ports.length) {
+    select.innerHTML = '';
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = '（未读取，请先查询设备信息）';
+    select.append(option);
+    select.disabled = true;
+    select.dataset.signature = '';
+    return;
+  }
+  select.disabled = false;
+  const options = ports.slice();
   // 本连接实际所在的模块串口排到最前，作为默认选择
   if (active && options.includes(active)) {
     options.sort((a, b) => (a === active ? -1 : (b === active ? 1 : a.localeCompare(b))));
@@ -846,7 +858,8 @@ function currentModulePort() {
   if (chosen) return chosen;
   if (snapshot && snapshot.active_module_port) return snapshot.active_module_port;
   const ports = (snapshot && snapshot.module_ports) || [];
-  return ports[0] || 'COM1';
+  // 不写死兜底端口：未知就返回空串，由调用方拒绝而非猜测
+  return ports[0] || '';
 }
 
 function renderAll() {
