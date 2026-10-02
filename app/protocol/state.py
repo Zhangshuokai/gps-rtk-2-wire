@@ -18,6 +18,8 @@ RATE_MIN_SPAN_S = 0.25
 STALE_AFTER_S = 2.0
 HEADING_MISMATCH_DEG = 2.0
 MAX_CONFIG_ENTRIES = 200
+# 某星座超过该时间没有新的 GSV，就丢弃其卫星，避免星座消失后残留「幽灵星」
+GSV_STALE_S = 10.0
 
 # 只对已知报文名做速率统计；其余归入 'other'，避免被伪造的 #A1/#A2… 撑爆字典
 RATE_KINDS = {
@@ -89,6 +91,9 @@ class GnssState:
         self.sats: dict[tuple[str, int | None], dict] = {}
         self.sat_at: dict[str, float] = {}
         self.gsv_meta: dict[str, dict] = {}
+        # 按 (星座, 信号频点, 日志种类) 累积的 PRN 集合。Unicore 的 GSV 会按信号频点分行
+        # （每条都写 total=1,index=1），不能只看 index==1 就清空整颗星座。
+        self.gsv_sets: dict[tuple[str, str | None, str], set] = {}
 
         self.checksum_errors = 0
         self.checksum_checked = 0
@@ -190,7 +195,7 @@ class GnssState:
             return None
 
         if kind in ('GSV', 'GSVH'):
-            self._merge_gsv(data)
+            self._merge_gsv(kind, data)
             return None
 
         if kind == 'GSA':
@@ -236,24 +241,38 @@ class GnssState:
             self.log_list.append(entry)
             self.log_list_at = _now()
 
-    def _merge_gsv(self, data: dict) -> None:
+    def _merge_gsv(self, kind: str, data: dict) -> None:
         sats = data['sats']
         # 一句组合 GSV（如 $GPGSV）里可能同时含多个星座的卫星，
         # 因此不能只看第一颗卫星的 system 来决定清理范围。
         systems = sorted({sat['system'] for sat in sats}) or ['?']
+        signal = data.get('signal')
+        index = data.get('index')
         now = _now()
         for system in systems:
             self.gsv_meta[system] = {
                 'total': data.get('total'),
-                'index': data.get('index'),
+                'index': index,
                 'in_view': data.get('in_view'),
             }
             self.sat_at[system] = now
+            frame_prns = {sat['prn'] for sat in sats if sat['system'] == system}
+            # 键含日志种类：GSV 与 GSVH 是两条独立日志，不能互相替换
+            key = (system, signal, kind)
+            # index==1 表示该 (星座, 信号, 日志) 新一轮开始，整集替换；同一轮的多条则追加。
+            # Unicore 按信号频点分行时每条都是 index==1，各自替换自己的信号集，
+            # 不同频点的卫星不会被彼此清掉（旧实现只看 index==1 会清空整颗星座）。
+            if index == 1 or key not in self.gsv_sets:
+                self.gsv_sets[key] = set(frame_prns)
+            else:
+                self.gsv_sets[key].update(frame_prns)
 
-        if data.get('index') == 1:
-            stale = set(systems)
-            for key in [k for k in self.sats if k[0] in stale]:
-                del self.sats[key]
+        # 某星座的存活 PRN = 其各信号集之并集；不在并集里的旧条目清掉。
+        live: dict[str, set] = {}
+        for (system, _sig, _kind), prns in self.gsv_sets.items():
+            live.setdefault(system, set()).update(prns)
+        for key in [k for k in self.sats if k[0] in live and k[1] not in live[k[0]]]:
+            del self.sats[key]
 
         for sat in sats:
             key = (sat['system'], sat['prn'])
@@ -432,6 +451,9 @@ class GnssState:
         return gga
 
     def _build_heading(self, now: float) -> dict:
+        # UNIHEADINGA 的航向/俯仰字段顺序已由官方手册确证（见 unicore.HEADING_FIELD_*），
+        # 但本机无固定解时两字段恒为 0；这里仍以语义无歧义的 $GPTHS 为航向主来源，
+        # 并保留与 UNIHEADINGA 的差值交叉校验（含 heading_swap 兜底开关）。
         ths = self.ths or {}
         log = self.heading_log or {}
 
@@ -491,6 +513,12 @@ class GnssState:
         course = rmc.get('course_deg')
         if course is None:
             course = vtg.get('course_deg')
+        # 北/东速度来自 Unicore #PVTSLNA（该日志只有北/东，没有天向；天向恒为 None）。
+        # BESTPOSA 不含速度，解析结果恒为 None——不要在这里臆造。
+        # #PSRVELA 实机确实输出（fixtures/psrvela_real.txt），但厂家手册 N4 R1.4/R1.13 与
+        # pyunigps 均未定义该【日志】（手册里的 PSRVEL 只是 CONFIG 配置项），仅 NovAtel 同名
+        # 日志可作线索，不足以确证 Unicore 字段含义，故不解析、天向仍为 None。
+        # 详见 docs/protocol/unicore-ascii.md §6.5。
         pvt = self.pvt or {}
         return {
             'speed_kn': speed_kn,
@@ -505,6 +533,13 @@ class GnssState:
         }
 
     def _build_satellites(self, now: float) -> dict:
+        # 星座长时间没有 GSV 就整批丢弃，避免残留幽灵星，并限制内部字典无限增长
+        stale = {s for s, at in self.sat_at.items() if now - at > GSV_STALE_S}
+        if stale:
+            for key in [k for k in self.sats if k[0] in stale]:
+                del self.sats[key]
+            for key in [k for k in self.gsv_sets if k[0] in stale]:
+                del self.gsv_sets[key]
         sats = []
         by_system: defaultdict = defaultdict(lambda: {'total': 0, 'used': 0, 'max_cn0': None, 'systems': 0})
         for (system, prn), sat in self.sats.items():
@@ -572,15 +607,18 @@ class GnssState:
         mismatch = heading.get('mismatch_deg')
         if mismatch is not None and mismatch > HEADING_MISMATCH_DEG:
             add('error', f'UNIHEADINGA 航向与 $GPTHS 相差 {mismatch:.2f}°',
-                '差值过大，说明 UNIHEADINGA 的航向/俯仰字段顺序与当前默认映射不一致，'
-                '请打开「交换航向/俯仰字段」后观察。')
+                '字段顺序已按官方手册确证，正常情况下两者应一致；'
+                '差值过大通常来自基线/天线安装朝向、$GPTHS 过旧或两路数据不同步。'
+                '可先勾选「交换航向/俯仰字段」排除映射异常，再检查安装与数据时效。')
 
         if satellites['tracked'] == 0:
             add('warn', '未收到卫星信息', '未解析到 $GPGSV / $GPGSVH 中的卫星。')
         elif not self.gsa_seen:
             add('info', '本模块不上报 GSA，「参与解算」只能显示为未知',
                 '实测该固件不支持 GSA/VTG（help 返回 not found）。仰角/方位角/C-N0 来自 GSV，仍然有效；'
-                '若需要逐星是否入解，需要改为解析 SATVISA/RANGEA（字段格式本机未能验证）。')
+                'SATVISA/RANGEA 虽被模块识别，但厂家手册 R1.13~R1.15（中/英）未定义其字段，'
+                '且相近的 SATELLITE（可见卫星）不含逐星入解标志——逐星入解需 BESTSAT/BESTSATA'
+                '（本机当前未输出）。所以本项如实显示未知，不做臆造。')
 
         if satellites.get('system_source_inferred'):
             add('info', f'{satellites["system_source_inferred"]} 颗卫星的星座由 PRN 号段推断',

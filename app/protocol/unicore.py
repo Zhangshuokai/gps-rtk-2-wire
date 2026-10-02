@@ -202,6 +202,34 @@ _HEADING_NAMES = {
     'UNIHEADINGA', 'UNIHEADINGB', 'HEADINGA', 'HEADINGB', 'HEADING2', 'UNIHEADING2',
 }
 
+# UNIHEADINGA/UNIHEADINGB 的 body 字段下标（从 sol_status 起算，不含 ``#`` 头部）。
+#
+# 字段顺序**已确证**（2026-09 联网核对），依据：
+#   1. 和芯星通官方手册《Unicore Reference Commands Manual For N4 High Precision
+#      Products》V2 EN R1.4，Table 7-118「UNIHEADING Message Structure」明确列出
+#      ID2..ID9 = sol stat, pos type, length, heading(0~360°), pitch(±90°),
+#      reserved, hdgstddev, ptchstddev，并注明 ASCII 语法即 ``UNIHEADINGA``。
+#      归档副本（文本可抽取）：
+#      https://github.com/jm2unbound/unicore-um982-ros2-driver
+#      → docs/Unicore Reference Commands Manual For N4 High Precision Products_V2_EN_R1.4.pdf
+#   2. semuconsulting/pyunigps ``src/pyunigps/unitypes_get.py::UNIHEADING``（其头注
+#      声明来源为官方 R1.13）：
+#      https://github.com/semuconsulting/pyunigps/blob/main/src/pyunigps/unitypes_get.py
+#      字段序列为 solstatus, postype, length, heading, pitch, reserved1,
+#      hdgstddev, ptchstddev，与上表逐项一致。
+#   3. BL1NH0/um982_driver ``scripts/um982_topic_driver.py::parse_uniheading_line``：
+#      https://github.com/BL1NH0/um982_driver/blob/main/scripts/um982_topic_driver.py
+#      直接解析 ASCII ``#UNIHEADINGA``，取 row[3]=heading、row[4]=pitch、
+#      row[6]=hdgstddev、row[7]=ptchstddev，同样一致。
+HEADING_FIELD_SOL_STATUS = 0
+HEADING_FIELD_POS_TYPE = 1
+HEADING_FIELD_BASELINE_LENGTH = 2
+HEADING_FIELD_HEADING = 3
+HEADING_FIELD_PITCH = 4
+# 下标 5 为保留字段（reserved），无实际含义，故不定义常量
+HEADING_FIELD_HEADING_STDDEV = 6
+HEADING_FIELD_PITCH_STDDEV = 7
+
 
 def parse_heading(frame: dict, swap_heading_pitch: bool = False) -> dict:
     """UNIHEADINGA / UNIHEADINGB —— 双天线定向日志。
@@ -210,14 +238,16 @@ def parse_heading(frame: dict, swap_heading_pitch: bool = False) -> dict:
 
         INSUFFICIENT_OBS,NONE,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,"",0,0,0,0,0,00,0,0
 
-    字段顺序（沿用 NovAtel HEADING 约定）::
+    字段顺序（**已确证**，见上方 ``HEADING_FIELD_*`` 的来源说明）::
 
         sol_status, pos_type, 基线长度(m), 航向(°), 俯仰(°), 保留,
-        航向标准差(°), 俯仰标准差(°), 保留, ...
+        航向标准差(°), 俯仰标准差(°), 站号, #SVs, #solnSVs, #obs, #multi, ...
 
     .. note::
-       航向/俯仰的位置是按 Unicore/NovAtel 文档推断的，本机当前无解所以无法实测确认。
-       前端提供「交换航向/俯仰」开关，并同时展示 NMEA ``$GPTHS`` 的独立航向值用于交叉校验。
+       航向/俯仰先后次序已由官方手册 Table 7-118 与两个第三方实现确证，不再是推断。
+       但本机抓包期间无固定解，两数值字段恒为 ``0.0000``，无法用实机数据反证；
+       因此**保留** ``swap_heading_pitch`` 开关与 ``$GPTHS`` 交叉校验作为实机兜底纠错，
+       不要删除。
     """
     fields = frame['body_fields']
     values: dict = {
@@ -234,25 +264,29 @@ def parse_heading(frame: dict, swap_heading_pitch: bool = False) -> dict:
         if token is None or not token.strip():
             return None
         try:
-            return float(token)
+            value = float(token)
         except ValueError:
             return None
+        # 串口字节不可信：拒绝 nan/inf/1e400，避免污染 JSON 快照（同 nmea._float）
+        return value if math.isfinite(value) else None
 
-    sol_status = (field(0) or '').strip().strip('"')
-    pos_type = (field(1) or '').strip().strip('"')
+    sol_status = (field(HEADING_FIELD_SOL_STATUS) or '').strip().strip('"')
+    pos_type = (field(HEADING_FIELD_POS_TYPE) or '').strip().strip('"')
     sol_text, sol_tone = _text(SOLUTION_STATUS_TEXT, sol_status)
     pos_text, pos_tone = _text(POSITION_TYPE_TEXT, pos_type)
 
-    length = number(2)
-    first = number(3)
-    second = number(4)
+    length = number(HEADING_FIELD_BASELINE_LENGTH)
+    first = number(HEADING_FIELD_HEADING)
+    second = number(HEADING_FIELD_PITCH)
     if swap_heading_pitch:
         heading, pitch = second, first
     else:
         heading, pitch = first, second
 
-    hdg_sigma = number(7) if swap_heading_pitch else number(6)
-    ptc_sigma = number(6) if swap_heading_pitch else number(7)
+    hdg_sigma = (number(HEADING_FIELD_PITCH_STDDEV) if swap_heading_pitch
+                 else number(HEADING_FIELD_HEADING_STDDEV))
+    ptc_sigma = (number(HEADING_FIELD_HEADING_STDDEV) if swap_heading_pitch
+                 else number(HEADING_FIELD_PITCH_STDDEV))
 
     values.update({
         'sol_status': sol_status or None,
@@ -274,60 +308,145 @@ def parse_heading(frame: dict, swap_heading_pitch: bool = False) -> dict:
     return values
 
 
-_PVT_NAMES = {'PVTSLNA', 'PVTSLNB', 'PVTSLN', 'BESTPOSA', 'BESTPOSB', 'BESTPOS'}
+# 位置速度时间日志，两种布局**互不相同**，必须按日志名分派（已核对厂家手册与第三方驱动，
+# 见 docs/protocol/unicore-ascii.md §6.5）：
+#   * PVTSLNA/B  —— Unicore 专有组合日志（无独立 sol_status；含 psrvelnorth/psrveleast）。
+#   * BESTPOSA/B —— NovAtel BESTPOS 布局，**不含任何速度字段**。
+# 另：BESTNAVA/B 在厂家手册中确有末尾速度字段，但**本机 `help` 未确认支持该日志名**
+# （实测识别到的是 BESTVELA），按「不实现硬件不支持的功能」不解析、不下发、不模拟。
+_PVTSLN_NAMES = {'PVTSLNA', 'PVTSLNB', 'PVTSLN'}
+_BESTPOS_NAMES = {'BESTPOSA', 'BESTPOSB', 'BESTPOS'}
+_PVT_NAMES = _PVTSLN_NAMES | _BESTPOS_NAMES
+
+
+def _field_at(fields: list[str], index: int) -> str | None:
+    """按索引取字段；负索引从末尾数。"""
+    if index < 0:
+        index += len(fields)
+    return fields[index] if 0 <= index < len(fields) else None
+
+
+def _number_at(fields: list[str], index: int) -> float | None:
+    token = _field_at(fields, index)
+    if token is None or not token.strip():
+        return None
+    try:
+        value = float(token)
+    except ValueError:
+        return None
+    # 串口字节不可信：拒绝 nan/inf/1e400，避免污染 JSON 快照（同 nmea._float）
+    return value if math.isfinite(value) else None
+
+
+# PVTSLNA body 字段下标。解析器与模拟器共用同一组常量，避免两处各写数字而漂移。
+PVTSLN_FIELD_POS_TYPE = 0
+PVTSLN_FIELD_HEIGHT = 1
+PVTSLN_FIELD_LAT = 2
+PVTSLN_FIELD_LON = 3
+PVTSLN_FIELD_HEIGHT_STDDEV = 4
+PVTSLN_FIELD_LAT_STDDEV = 5
+PVTSLN_FIELD_LON_STDDEV = 6
+PVTSLN_FIELD_UNDULATION = 12
+PVTSLN_FIELD_VEL_NORTH = 17
+PVTSLN_FIELD_VEL_EAST = 18
+PVTSLN_FIELD_VEL_GROUND = 19
 
 
 def parse_pvt(frame: dict) -> dict:
-    """PVTSLNA / BESTPOSA —— 位置速度时间解。
+    """PVTSLNA / BESTPOSA —— 位置速度时间解（按日志名分派布局）。
 
-    .. note:: 本机当前未开启该日志，字段顺序按 NovAtel BESTPOS 约定实现，属尽力而为。
+    **PVTSLNA/B（Unicore 专有组合日志）** body 顺序（据厂家《Unicore Reference
+    Commands Manual For N4》V2 R1.13，并经 sunshineharry/UM982Driver 交叉验证）::
+
+        [0] 定位类型(NARROW_INT…), [1] 海拔(m), [2] 纬度(°), [3] 经度(°),
+        [4] 海拔标准差, [5] 纬度标准差, [6] 经度标准差, [7] 差分龄期,
+        [8] 伪距定位类型, [9] 伪距海拔, [10] 伪距纬度, [11] 伪距经度,
+        [12] 大地水准面差距(m), [13..16] 各解算卫星数,
+        [17] 北向速度(m/s), [18] 东向速度(m/s), [19] 对地速度(m/s), [20] 定向类型…
+
+    .. note::
+       PVTSLNA **没有独立 sol_status**（[0] 即定位类型），并且**没有天向速度**，
+       只有 [19] 的对地速度。旧实现把 field 11/12/13 当成 N/E/U 速度是错的。
+
+    **BESTPOSA/B** 为 NovAtel BESTPOS 布局，**不含速度**，速度字段一律返回 ``None``。
     """
     fields = frame['body_fields']
+    name = frame['name']
+    if name in _PVTSLN_NAMES:
+        return _parse_pvtsln(frame, fields)
+    return _parse_bestpos(frame, fields)
 
-    def field(index: int) -> str | None:
-        return fields[index] if index < len(fields) else None
 
-    def number(index: int) -> float | None:
-        token = field(index)
-        if token is None or not token.strip():
-            return None
-        try:
-            return float(token)
-        except ValueError:
-            return None
-
-    sol_status = (field(0) or '').strip()
-    pos_type = (field(1) or '').strip()
-    sol_text, sol_tone = _text(SOLUTION_STATUS_TEXT, sol_status)
+def _parse_pvtsln(frame: dict, fields: list[str]) -> dict:
+    """Unicore PVTSLN 组合日志（含北/东速度，无天向速度）。"""
+    pos_type = (_field_at(fields, PVTSLN_FIELD_POS_TYPE) or '').strip().strip('"')
     pos_text, pos_tone = _text(POSITION_TYPE_TEXT, pos_type)
-
-    vel_n, vel_e, vel_u = number(11), number(12), number(13)
-    speed = None
-    if None not in (vel_n, vel_e):
+    vel_n = _number_at(fields, PVTSLN_FIELD_VEL_NORTH)
+    vel_e = _number_at(fields, PVTSLN_FIELD_VEL_EAST)
+    ground = _number_at(fields, PVTSLN_FIELD_VEL_GROUND)
+    speed = ground
+    if speed is None and None not in (vel_n, vel_e):
         speed = (vel_n ** 2 + vel_e ** 2) ** 0.5
-
+    course = None
+    if None not in (vel_n, vel_e) and (vel_n or vel_e):
+        course = math.degrees(math.atan2(vel_e, vel_n)) % 360.0
+    valid = pos_type.upper() not in ('', 'NONE', 'INVALID')
     return {
         'log': frame['name'],
         'raw_body': frame['body'],
+        'layout': 'PVTSLN',
+        'sol_status': None,  # 该日志没有独立解状态字段
+        'sol_status_text': None,
+        'sol_tone': 'ok' if valid else 'none',
+        'pos_type': pos_type or None,
+        'pos_type_text': pos_text,
+        'pos_tone': pos_tone,
+        'lat_deg': _number_at(fields, PVTSLN_FIELD_LAT),
+        'lon_deg': _number_at(fields, PVTSLN_FIELD_LON),
+        'height_m': _number_at(fields, PVTSLN_FIELD_HEIGHT),
+        'undulation_m': _number_at(fields, PVTSLN_FIELD_UNDULATION),
+        'datum': None,
+        'lat_stddev_m': _number_at(fields, PVTSLN_FIELD_LAT_STDDEV),
+        'lon_stddev_m': _number_at(fields, PVTSLN_FIELD_LON_STDDEV),
+        'height_stddev_m': _number_at(fields, PVTSLN_FIELD_HEIGHT_STDDEV),
+        'vel_n_mps': vel_n,
+        'vel_e_mps': vel_e,
+        'vel_u_mps': None,  # PVTSLNA 不提供天向速度
+        'ground_speed_mps': speed,
+        'ground_course_deg': course,
+        'valid': valid,
+    }
+
+
+def _parse_bestpos(frame: dict, fields: list[str]) -> dict:
+    """NovAtel BESTPOS 布局：只解位置，**没有速度字段**。"""
+    sol_status = (_field_at(fields, 0) or '').strip()
+    pos_type = (_field_at(fields, 1) or '').strip()
+    sol_text, sol_tone = _text(SOLUTION_STATUS_TEXT, sol_status)
+    pos_text, pos_tone = _text(POSITION_TYPE_TEXT, pos_type)
+    return {
+        'log': frame['name'],
+        'raw_body': frame['body'],
+        'layout': 'BESTPOS',
         'sol_status': sol_status or None,
         'sol_status_text': sol_text,
         'sol_tone': sol_tone,
         'pos_type': pos_type or None,
         'pos_type_text': pos_text,
         'pos_tone': pos_tone,
-        'lat_deg': number(2),
-        'lon_deg': number(3),
-        'height_m': number(4),
-        'undulation_m': number(5),
-        'datum': (field(6) or '').strip() or None,
-        'lat_stddev_m': number(7),
-        'lon_stddev_m': number(8),
-        'height_stddev_m': number(9),
-        'vel_n_mps': vel_n,
-        'vel_e_mps': vel_e,
-        'vel_u_mps': vel_u,
-        'ground_speed_mps': speed,
-        'ground_course_deg': None if not speed else (math.degrees(math.atan2(vel_e, vel_n)) % 360.0),
+        'lat_deg': _number_at(fields, 2),
+        'lon_deg': _number_at(fields, 3),
+        'height_m': _number_at(fields, 4),
+        'undulation_m': _number_at(fields, 5),
+        'datum': (_field_at(fields, 6) or '').strip() or None,
+        'lat_stddev_m': _number_at(fields, 7),
+        'lon_stddev_m': _number_at(fields, 8),
+        'height_stddev_m': _number_at(fields, 9),
+        'vel_n_mps': None,
+        'vel_e_mps': None,
+        'vel_u_mps': None,
+        'ground_speed_mps': None,
+        'ground_course_deg': None,
         'valid': sol_status.upper() == 'SOL_COMPUTED',
     }
 
@@ -463,9 +582,10 @@ COMMAND_PRESETS = [
         'id': 'telemetry',
         'name': '标准遥测输出',
         'safe': False,
-        'note': '把该端口改成 1Hz 定位 + 10Hz 双天线定向。'
+        'note': '把该端口改成 1Hz 定位 + 10Hz 双天线定向 + 10Hz 速度（PVTSLNA，北/东分量）。'
                 '日志名取自模块 LOGLIST 实测（GPGGA/GPRMC/GNGSV/GPTHS/UNIHEADINGA，'
-                '注意不是 GNGGA/GPGSV）。UNLOGALL 会丢弃原有日志配置，且本预设【不会】写入 flash。',
+                '注意不是 GNGGA/GPGSV）；PVTSLNA 为厂家已识别日志，提供北/东速度（无天向）。'
+                'UNLOGALL 会丢弃原有日志配置，且本预设【不会】写入 flash。',
         'commands': [
             'UNLOGALL {PORT}',
             'LOG {PORT} GPGGA ONTIME 1',
@@ -473,6 +593,7 @@ COMMAND_PRESETS = [
             'LOG {PORT} GNGSV ONTIME 1',
             'LOG {PORT} GPTHS ONTIME 0.1',
             'LOG {PORT} UNIHEADINGA ONTIME 0.1',
+            'LOG {PORT} PVTSLNA ONTIME 0.1',
         ],
     },
     {

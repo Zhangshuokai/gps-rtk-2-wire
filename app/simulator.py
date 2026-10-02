@@ -15,9 +15,14 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from .protocol import nmea
+from .protocol import nmea, unicore
 
 SIM_PORT = 'SIM'
+# 模拟器复现真机的模块串口布局：3 个 UART，本连接位于 COM3（由 LOGLIST 表头给出）。
+# 这是「仿真数据」而非程序假设——真实场景下目标端口始终取 LOGLIST 实测的
+# active_module_port，程序不会写死任何端口。
+MODULE_PORTS = ('COM1', 'COM2', 'COM3')
+ACTIVE_MODULE_PORT = 'COM3'
 
 
 # --------------------------------------------------------------------------- #
@@ -89,6 +94,9 @@ class Simulator:
         self.bytes_read = 0
         self.reconnects = 0
         self.last_error: str | None = None
+        # 同一个地面速度同时驱动 $GNRMC（速度/航迹角）与 #PVTSLNA（北/东分量）
+        self._ground_speed_mps = 0.0
+        self._ground_course_deg = 0.0
 
         rnd = random.Random(20260930)
         self.system_names: dict[str, str] = {}
@@ -215,6 +223,11 @@ class Simulator:
         heading_sigma = 0.08 + 0.02 * abs(math.sin(elapsed / 7.0))
         pitch_sigma = 0.12 + 0.03 * abs(math.cos(elapsed / 6.0))
 
+        # 同一个地面速度同时驱动 $GNRMC（速度/航迹角）与 #PVTSLNA（北/东分量），
+        # 避免模拟器出现两套互相矛盾的速度读数。
+        self._ground_speed_mps = 1.2 + 0.6 * math.sin(elapsed / 17.0)
+        self._ground_course_deg = (heading + 10.0 * math.sin(elapsed / 11.0)) % 360.0
+
         if tick % int(round(self.rate_hz)) == 1:
             self._emit_gga(now)
             self._emit_rmc(now)
@@ -224,12 +237,47 @@ class Simulator:
         status = 'A'
         self._emit_line(_sentence(f'GPTHS,{heading:.4f},{status}'))
 
+        # 字段顺序已确证（官方手册 Table 7-118，见 protocol/unicore.py 的
+        # HEADING_FIELD_* 说明）：sol_status, pos_type, 基线长度, 航向, 俯仰,
+        # 保留, 航向σ, 俯仰σ, 站号, #SVs, #solnSVs, #obs, #multi, ...
         body = (
             f'SOL_COMPUTED,NARROW_INT,{BASELINE_LENGTH_M:.4f},{heading:.4f},{pitch:.4f},0.0000,'
             f'{heading_sigma:.4f},{pitch_sigma:.4f},"",32,32,32,0,0,00,0,0'
         )
         self._emit_line(
             f'#UNIHEADINGA,96,GPS,UNKNOWN,1,{ms},23575,0,18,{tick % 256};{body}*{_fake_crc(tick)}'
+        )
+
+        # Unicore 组合日志 PVTSLNA：界面「速度 北/东/天」的北/东分量由它驱动。
+        # 该日志**没有天向速度**，所以界面「天」保持 —（不要臆造）。字段下标取自
+        # app/protocol/unicore.py 的 PVTSLN_FIELD_*，与解析器共用同一份定义，避免漂移。
+        speed = self._ground_speed_mps
+        radians = math.radians(self._ground_course_deg)
+        vel_north = speed * math.cos(radians)
+        vel_east = speed * math.sin(radians)
+        pvtsln = [''] * 21
+        pvtsln[unicore.PVTSLN_FIELD_POS_TYPE] = 'NARROW_INT'
+        pvtsln[unicore.PVTSLN_FIELD_HEIGHT] = '42.5000'
+        pvtsln[unicore.PVTSLN_FIELD_LAT] = f'{BASE_LAT:.11f}'
+        pvtsln[unicore.PVTSLN_FIELD_LON] = f'{BASE_LON:.11f}'
+        pvtsln[unicore.PVTSLN_FIELD_HEIGHT_STDDEV] = '0.0100'
+        pvtsln[unicore.PVTSLN_FIELD_LAT_STDDEV] = '0.0080'
+        pvtsln[unicore.PVTSLN_FIELD_LON_STDDEV] = '0.0090'
+        pvtsln[7] = '0.5'  # 差分龄期
+        pvtsln[8] = 'NARROW_INT'  # 伪距定位类型
+        pvtsln[9] = '42.5000'
+        pvtsln[10] = f'{BASE_LAT:.11f}'
+        pvtsln[11] = f'{BASE_LON:.11f}'
+        pvtsln[unicore.PVTSLN_FIELD_UNDULATION] = '-8.2340'
+        pvtsln[13] = pvtsln[14] = pvtsln[15] = '32'
+        pvtsln[16] = '0'
+        pvtsln[unicore.PVTSLN_FIELD_VEL_NORTH] = f'{vel_north:.4f}'
+        pvtsln[unicore.PVTSLN_FIELD_VEL_EAST] = f'{vel_east:.4f}'
+        pvtsln[unicore.PVTSLN_FIELD_VEL_GROUND] = f'{speed:.4f}'
+        pvtsln[20] = 'NARROW_INT'
+        self._emit_line(
+            f'#PVTSLNA,96,GPS,UNKNOWN,1,{ms},23575,0,18,{tick % 256};'
+            f'{",".join(pvtsln)}*{_fake_crc(tick + 1)}'
         )
 
     def _emit_gga(self, now: datetime) -> None:
@@ -243,9 +291,10 @@ class Simulator:
     def _emit_rmc(self, now: datetime) -> None:
         lat, lat_hemi = _nmea_coord(BASE_LAT, True)
         lon, lon_hemi = _nmea_coord(BASE_LON, False)
+        speed_kn = self._ground_speed_mps * 1.943844  # m/s -> kn
         self._emit_line(_sentence(
-            f'GNRMC,{now.strftime("%H%M%S")}.00,A,{lat},{lat_hemi},{lon},{lon_hemi},0.42,'
-            f'123.7,{now.strftime("%d%m%y")},,,A'
+            f'GNRMC,{now.strftime("%H%M%S")}.00,A,{lat},{lat_hemi},{lon},{lon_hemi},'
+            f'{speed_kn:.2f},{self._ground_course_deg:.1f},{now.strftime("%d%m%y")},,,A'
         ))
 
     def _emit_gsv(self, elapsed: float) -> None:
@@ -315,14 +364,14 @@ class Simulator:
         """多行 LOGLIST 回显：真实固件用 '<' 开头、Tab 缩进逐条列出。"""
         ms = int(time.monotonic() * 1000) % 604800000
         entries: list[tuple[str, str, float]] = []
-        for port in ('COM1', 'COM2', 'COM3'):
+        for port in MODULE_PORTS:
             for name, period in (('GPGGA', 0.1), ('GPRMC', 0.1), ('AGRICA', 0.1),
                                  ('GPTHS', 0.1), ('GNGSV', 1.0), ('UNIHEADINGA', 0.1)):
                 entries.append((port, name, period))
-        # 实测 GNGSVH 只配在 COM3 上（也是判断本连接位于哪个端口的关键线索）
-        entries.append(('COM3', 'GNGSVH', 1.0))
+        # 实测 GNGSVH 只配在本连接所在的模块串口上（也是判断连接位于哪个端口的关键线索）
+        entries.append((ACTIVE_MODULE_PORT, 'GNGSVH', 1.0))
 
-        self._emit_line(f'<LOGLIST COM3 23575 96.000000 UNKNOWN 1 {ms} 3795240 28 18')
+        self._emit_line(f'<LOGLIST {ACTIVE_MODULE_PORT} 23575 96.000000 UNKNOWN 1 {ms} 3795240 28 18')
         self._emit_line(f'<\t{len(entries)}')
         for port, name, period in entries:
             self._emit_line(f'<\t{name} {port} {period:g}')

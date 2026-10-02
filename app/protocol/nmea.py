@@ -240,8 +240,11 @@ def _parse_gsv(talker: str, fields: list[str]) -> dict | None:
         return None
 
     rest = fields[4:]
+    signal = None
     if rest and (len(rest) - 4) % 4 == 1:
-        # 末尾是 NMEA 4.11 的信号 ID；此处只需要把它摘掉以保证分组正确
+        # 末尾是 NMEA 4.11 的信号 ID（本机 BeiDou 按信号频点分行时会带上）。
+        # 摘掉它保证分组正确，同时保留下来供状态层按 (星座, 信号) 累积。
+        signal = rest[-1].strip() or None
         rest = rest[:-1]
 
     system = system_of(talker)
@@ -268,7 +271,8 @@ def _parse_gsv(talker: str, fields: list[str]) -> dict | None:
             'cn0': _float(cn0),
         })
     return {
-        'total': total, 'index': index, 'in_view': in_view, 'sats': sats,
+        'total': total, 'index': index, 'in_view': in_view,
+        'signal': signal, 'sats': sats,
     }
 
 

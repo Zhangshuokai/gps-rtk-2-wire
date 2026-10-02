@@ -16,6 +16,7 @@ CSV_COLUMNS = [
     'pitch_deg', 'baseline_length_m', 'sol_status', 'pos_type',
     'heading_stddev_deg', 'pitch_stddev_deg', 'heading_mismatch_deg',
     'speed_kn', 'speed_kmh', 'course_deg',
+    'vel_n_mps', 'vel_e_mps', 'vel_u_mps',
     'sats_tracked', 'sats_used', 'max_cn0',
 ]
 
@@ -256,6 +257,9 @@ class Recorder:
             'speed_kn': velocity.get('speed_kn'),
             'speed_kmh': velocity.get('speed_kmh'),
             'course_deg': velocity.get('course_deg'),
+            'vel_n_mps': velocity.get('vel_n_mps'),
+            'vel_e_mps': velocity.get('vel_e_mps'),
+            'vel_u_mps': velocity.get('vel_u_mps'),
             'sats_tracked': sats.get('tracked'),
             'sats_used': sats.get('used'),
             'max_cn0': sats.get('max_cn0'),
