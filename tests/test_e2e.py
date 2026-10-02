@@ -361,13 +361,23 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     section('8. GSA 系统归属与解质量映射')
     st4 = state_mod.GnssState()
     st4.feed_line('$GPGSV,1,1,3,12,45,100,40,19,30,200,41,25,60,300,42')
-    st4.feed_line('$GNGSA,A,3,12,19,25,,,,,,,,,2.38,1.10,2.11,1')
+    st4.feed_line('$GNGSA,A,3,12,19,25,,,,,,,,,,,2.38,1.10,2.11,1')
     check('$GNGSA 现在能标记「参与解算」', st4.snapshot()['satellites']['used'] == 3,
           str(st4.snapshot()['satellites']['used']))
     st5 = state_mod.GnssState()
     st5.feed_line('$GPGSV,1,1,3,12,45,100,40,19,30,200,41,25,60,300,42')
     st5.feed_line('$GPGSA,A,3,12,19,25,,,,,,,,,2.38,1.10,2.11,1')
     check('$GPGSA 仍然只标记本星座', st5.snapshot()['satellites']['used'] == 3)
+    # 厂家手册 Table 7-22：BDS 入解超过 12 颗时拆成两条同 SysID 的 $GNGSA，
+    # 同一轮应取并集，不能被最后一条覆盖（否则「参与解算」只剩 4 颗）。
+    st6 = state_mod.GnssState()
+    bds_prns = (1, 3, 4, 6, 7, 9, 10, 16, 21, 22, 36, 39, 40, 45, 59, 60)
+    st6.feed_line('$GBGSV,1,1,16,' + ','.join(f'{p},,,' for p in bds_prns) + '*00')
+    st6.feed_line('$GNGSA,M,3,01,03,04,06,07,09,10,16,21,22,36,39,1.4,0.7,1.2,4')
+    st6.feed_line('$GNGSA,M,3,40,45,59,60,,,,,,,,,1.4,0.7,1.2,4')
+    check('同星座多条 GSA 取并集（>12 颗入解）',
+          st6.snapshot()['satellites']['used'] == 16,
+          str(st6.snapshot()['satellites']['used']))
     check('解质量映射正确',
           (state_mod.quality_from_pos_type('NARROW_INT'), state_mod.quality_from_pos_type('NARROW_FLOAT'),
            state_mod.quality_from_pos_type('SINGLE'), state_mod.quality_from_pos_type('NONE'))

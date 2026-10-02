@@ -62,7 +62,10 @@ python tests\test_e2e.py                  :: 唯一的测试入口
    `help VTG` 报 not found，但 **`help GPGSA` / `help GPVTG` 均有效**；
    `LOG <port> GPGSA ONTIME <s>` 实发 `$GNGSA`（每星座一条，末尾为 NMEA 4.11 系统 ID）。
    本程序**已能解析** GSA 并据此标记逐星「参与解算」（`satellites.used_source == 'GSA'`），
-   「标准遥测输出」预设已含该命令。**不要再用裸名 `GSA` 判断能力**——`$--GSA` 缺失
+   「标准遥测输出」预设已含该命令。**同一星座入解超过 12 颗时，模块按 SysID 拆成多条**
+   `$GNGSA`（厂家手册 Table 7-22 的 BDS 示例即两行），同一轮的多条必须**取并集**
+   （`state.GnssState._merge_gsa` 用 `GSA_EPOCH_GAP_S` 归并），不能后一条覆盖前一条。
+   **不要再用裸名 `GSA` 判断能力**——`$--GSA` 缺失
    只说明该日志没开启，不等于固件不支持。未开启时界面如实显示 `参与解算（GSA 未开启）`
    并置 `—`（`used_source` 为 `None`），不臆造。2026-10 复核：`SATVISA` 实机**有输出**但只是
    可见卫星（无入解标志），厂家用于逐星入解的是 `BESTSAT`(`BESTSATA`)，本机实测**无输出**，

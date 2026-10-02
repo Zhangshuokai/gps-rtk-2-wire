@@ -20,6 +20,9 @@ HEADING_MISMATCH_DEG = 2.0
 MAX_CONFIG_ENTRIES = 200
 # 某星座超过该时间没有新的 GSV，就丢弃其卫星，避免星座消失后残留「幽灵星」
 GSV_STALE_S = 10.0
+# 同一星座入解卫星超过 12 颗时，模块会按 SysID 拆成多条 GSA（厂家手册 Table 7-22
+# 的 BDS 示例即两行）。同一轮的多条间隔很小，跨轮次则拉开约一个 GSA 周期，用此间隔归并。
+GSA_EPOCH_GAP_S = 0.5
 
 # 只对已知报文名做速率统计；其余归入 'other'，避免被伪造的 #A1/#A2… 撑爆字典
 RATE_KINDS = {
@@ -73,6 +76,10 @@ class GnssState:
         self.log_list: list[dict] = []
         self.log_list_at: float | None = None
         self.gsa_seen: int = 0
+        # 按星座累积「参与解算」的 PRN：同一星座可能有多条 GSA（>12 颗入解），
+        # 需在同一轮内取并集，跨轮次再重置。
+        self.gsa_used: dict[str, set[int]] = {}
+        self.gsa_at: dict[str, float] = {}
 
         self.gga: dict | None = None
         self.gga_at: float | None = None
@@ -297,10 +304,22 @@ class GnssState:
         # $GNGSA 这类语句无法从 talker 确定星座（system 会是 'GNSS'），
         # 此时按 PRN 跨星座匹配，否则「参与解算」会永远为空。
         match_any = system in (None, '', '?', 'GNSS')
+        if match_any:
+            for _key, sat in self.sats.items():
+                sat['used'] = sat.get('prn') in used_prns
+            return
+        # 一个星座入解卫星超过 12 颗时，模块按 SysID 拆成多条 GSA（厂家手册
+        # Table 7-22 的 BDS 示例即两行）。同一轮的多条必须取并集；若后一条直接覆盖，
+        # 只有最后一条的卫星会被标成「参与解算」。用到达间隔区分轮次（GSA 通常 1 Hz）。
+        now = _now()
+        if now - self.gsa_at.get(system, 0.0) > GSA_EPOCH_GAP_S:
+            self.gsa_used[system] = set()
+        self.gsa_used[system] |= used_prns
+        self.gsa_at[system] = now
+        accumulated = self.gsa_used[system]
         for key, sat in self.sats.items():
-            if not match_any and key[0] != system:
-                continue
-            sat['used'] = sat.get('prn') in used_prns
+            if key[0] == system:
+                sat['used'] = sat.get('prn') in accumulated
 
     def _tick(self, kind: str) -> None:
         bucket = kind if kind in RATE_KINDS else 'other'
