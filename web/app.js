@@ -590,8 +590,8 @@ function renderSatTable() {
   const usedAvailable = satellites.used_source != null;
   const header = $('satUsedHeader');
   if (header) {
-    header.textContent = usedAvailable ? '参与解算' : '参与解算（GSA 不可用）';
-    header.title = usedAvailable ? '' : '本模块固件不上报 GSA/VTG，无法逐星判定是否入解';
+    header.textContent = usedAvailable ? '参与解算' : '参与解算（GSA 未开启）';
+    header.title = usedAvailable ? '' : '本模块支持 GSA（配置名 GPGSA），当前端口未开启该日志；用预设「标准遥测输出」即可开启';
   }
   const body = $('satTableBody');
   if (!list.length) {

@@ -58,10 +58,15 @@ python tests\test_e2e.py                  :: 唯一的测试入口
 4. **`$command` / `$CONFIG` 的校验和把起始 `$` 也算进去**（与 NMEA 0183 相反）：
    `$command,VERSION,response: OK*04`（不含 `$` 会得 `20`）。
    用 `nmea.checksum_inclusive()`；标准 NMEA 用 `nmea.compute_checksum()`。
-5. **本固件不支持 `GSA` / `VTG`**（`help` 返回 not found）。因此逐星「是否参与解算」**无法实现**，
-   界面如实显示 `参与解算（GSA 不可用）` 并置 `—`（`satellites.used_source` 为 `None`）。
-   不要"修好"这一列——那会变成谎报。2026-10 复核：`SATVISA` 实机**有输出**但只是可见卫星
-   （无入解标志），厂家用于逐星入解的是 `BESTSAT`(`BESTSATA`)，本机实测**无输出**。
+5. **`GSA`/`VTG` 的配置名带 `GP` 前缀，裸名才 `not found`**：实测 2026-10，`help GSA` /
+   `help VTG` 报 not found，但 **`help GPGSA` / `help GPVTG` 均有效**；
+   `LOG <port> GPGSA ONTIME <s>` 实发 `$GNGSA`（每星座一条，末尾为 NMEA 4.11 系统 ID）。
+   本程序**已能解析** GSA 并据此标记逐星「参与解算」（`satellites.used_source == 'GSA'`），
+   「标准遥测输出」预设已含该命令。**不要再用裸名 `GSA` 判断能力**——`$--GSA` 缺失
+   只说明该日志没开启，不等于固件不支持。未开启时界面如实显示 `参与解算（GSA 未开启）`
+   并置 `—`（`used_source` 为 `None`），不臆造。2026-10 复核：`SATVISA` 实机**有输出**但只是
+   可见卫星（无入解标志），厂家用于逐星入解的是 `BESTSAT`(`BESTSATA`)，本机实测**无输出**，
+   故 GSA 是当前唯一可用的逐星入解来源。
 6. **目标端口只能取实测值，不得写死**：`active_module_port` 取自 `LOGLIST` **表头第一个字段**
    （本机实测为模块 `COM3`；旁证：`GNGSVH` 只配在该端口、而流里确有 `$GPGSVH`）。
    模块自报的 `COM1/COM2/COM3` 与电脑侧串口名（CH340，实测曾为 `COM10`/`COM11`）是两回事。
@@ -130,8 +135,9 @@ python tests\test_e2e.py                  :: 唯一的测试入口
 * `app/simulator.py` 是对外声称"可用于验证界面"的仿真源，必须与真机口径一致：
   * `_emit_loglist()` 要产出 19 条 / 3 端口（`GNGSVH` 只在本连接端口，常量
     `ACTIVE_MODULE_PORT`）；端口值只用具名常量，别散落字面量。
-  * 模拟器会发 `$--GSA`（真机**不支持**），仅为让「参与解算」渲染路径可测——真机该列显示 `—`；
-    每个星座的 GSA 系统 ID 必须各不相同（曾写死 `1` 导致所有卫星被标到 GPS）。
+  * 模拟器会发 `$--GSA`；真机也支持，只是默认未开启（配置名 `GPGSA`，见上条第 5 点），
+    预设「标准遥测输出」会开启。每个星座的 GSA 系统 ID 必须各不相同
+    （曾写死 `1` 导致所有卫星被标到 GPS）。
   * `$command` / `$CONFIG` 用 `_vendor_sentence`（含 `$` 的校验和）。
 * 用 `--sim` 或 `--replay` 就能在没有硬件时验证前端；配合浏览器截图确认渲染。
 

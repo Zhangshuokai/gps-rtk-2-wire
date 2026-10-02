@@ -98,13 +98,15 @@ sol_status, pos_type, 基线长度(m), 航向(°), 俯仰(°), 保留, 航向σ(
 * 判断定向/定位日志是否真的开启；
 * 表头第一个字段即**本连接所在的模块串口**（实测 `COM3`）。
 
-### 6.3 本固件不支持的日志
+### 6.3 `GSA` / `VTG` 的配置名（易错；2026-10 实机确证）
 
-实测 `help` 返回 `not found`：`GSA`、`VTG`、`TRACKSTATA`、`HEADING2`、`INSA`、
-`GNSSPOS`、`GNSSVEL`、`NOISEFLOOR` 等。
+裸名 `help` 返回 `not found`：`GSA`、`VTG`、`TRACKSTATA`、`HEADING2`、`INSA`、
+`GNSSPOS`、`GNSSVEL`、`NOISEFLOOR` 等。但 **`GPGSA` / `GPVTG` 实际有效**：
+`help GPGSA`、`help GPVTG` 均返回 NMEA 说明，`LOG <port> GPGSA ONTIME <s>` 实发 `$GNGSA`。
 
-**直接影响**：无法用 `$--GSA` 判定「卫星是否参与解算」。界面如实显示
-`参与解算（GSA 不可用）` 并置 `—`，**不要伪造该列**。
+**直接影响**：可用 `$--GSA` 判定「卫星是否参与解算」——本程序已解析，
+「标准遥测输出」预设含 `LOG {PORT} GPGSA ONTIME 1`；未开启该日志时界面如实显示
+`参与解算（GSA 未开启）` 并置 `—`，不臆造。**不要用裸名 `GSA` 判断能力**。
 
 ### 6.4 已识别但未解析 / 未验证
 
@@ -193,11 +195,12 @@ body 结构可稳定对齐为 `TRUE, TRUE, #sat` + `#sat` 条 7 字段记录（4
 
 **为什么它不能给「参与解算」**：与它最接近的官方 `SATELLITE`（ASCII `SATELLITEA`，
 Message ID 1042）逐星字段只有 `PRN/slot, health, elev, az, reserved, reserved`，其中
-`sat vis`/`comp alm` 是**整条报文级**布尔量，**没有「该星是否参与解算」**。厂家真正用于
-该语义的是 `BESTSAT`（Message ID 1041，"Satellites Used in Position Solution"，
-ASCII `BESTSATA`）；本机实测 `LOG COM3 BESTSATA ...` **无输出**，故该列仍无法实现。
+`sat vis`/`comp alm` 是**整条报文级**布尔量，**没有「该星是否参与解算」**。厂家另有
+`BESTSAT`（Message ID 1041，"Satellites Used in Position Solution"，ASCII `BESTSATA`），
+但本机实测 `LOG COM3 BESTSATA ...` **无输出**。
 
-**结论**：`SATVISA` 是「卫星可见性」，不能实现逐星入解；界面继续如实显示 `—`。
+**结论**：`SATVISA` 是「卫星可见性」，不能实现逐星入解。逐星入解改用 **GSA**
+（配置名 `GPGSA`，见 §6.3）；未开启该日志时界面如实显示 `—`。
 
 ## 7. 已知限制汇总
 
@@ -206,8 +209,9 @@ ASCII `BESTSATA`）；本机实测 `LOG COM3 BESTSATA ...` **无输出**，故�
 * `UNIHEADINGA` 航向/俯仰先后次序已由官方手册 Table 7-118 + 两个第三方实现确证
   （见 §6.1）；仅缺固定解实机反证，保留交叉校验兜底。
 * `SATVISA`/`RANGEA` **无法给出逐星入解**：2026-10 复核 R1.13/R1.14/R1.15（中/英）手册均未定义
-  该日志名，相近的 `SATELLITE` 也无逐星入解标志；逐星入解应查 `BESTSAT`(1041)/`BESTSATA`
-  （本机实测无输出，见 §6.6）。`PVTSLNA` 速度字段已确证（见 §6.5）。
+  该日志名，相近的 `SATELLITE` 也无逐星入解标志；厂家另有 `BESTSAT`(1041)/`BESTSATA`
+  但本机实测无输出（见 §6.6）。逐星入解实际改用 **GSA**（`GPGSA`→`$GNGSA`，见 §6.3）。
+  `PVTSLNA` 速度字段已确证（见 §6.5）。
 * `PSRVELA` 实机有输出但厂家手册（R1.4/R1.13）与 `pyunigps` 均未定义该日志，
   字段含义**未确证**，故不解析、界面「天」保持 `—`（见 §6.4/§6.5）。
 

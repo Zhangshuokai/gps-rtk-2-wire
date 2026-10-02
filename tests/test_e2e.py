@@ -455,7 +455,7 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
           any(p['id'] == 'loglist' and p['commands'] == ['LOGLIST'] and p['safe']
               for p in unicore.COMMAND_PRESETS))
 
-    # GSA 缺失：本模块固件不支持，界面必须显示未知而不是“否”
+    # GSA 缺失（未开启日志）：界面必须显示未知而不是“否”
     st7 = state_mod.GnssState()
     st7.feed_line('$GPGSV,1,1,3,12,45,100,40,19,30,200,41,25,60,300,42')
     check('无 GSA 时 used_source 为 None（界面显示未知）',
@@ -478,6 +478,14 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     check('#SATVISA 不会伪造逐星「参与解算」',
           snap7b['satellites']['used'] == 0
           and all(not s.get('used') for s in snap7b['satellites']['list']),
+    # 2026-10 实机确证：本模块支持 GSA，配置名是 GPGSA（裸名 GSA 才 not found），
+    # 实发 $GNGSA。标准遥测预设必须带上它，否则「参与解算」永远显示未知。
+    check('标准遥测预设开启 GPGSA（逐星参与解算）',
+          any(p['id'] == 'telemetry'
+              and any(cmd.startswith('LOG {PORT} GPGSA ') for cmd in p['commands'])
+              for p in unicore.COMMAND_PRESETS))
+    check('预设不使用裸名 GSA（裸名 help 返回 not found，是错误写法）',
+          not any(re.search(r'\bGSA\b', cmd) and 'GPGSA' not in cmd for cmd in all_commands))
           str(snap7b['satellites']['used']))
     check('#SATVISA 不会把 used_source 谎报为 SATVISA',
           snap7b['satellites']['used_source'] is None,

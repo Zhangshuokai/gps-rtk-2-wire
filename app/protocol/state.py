@@ -565,7 +565,8 @@ class GnssState:
             'list': sats,
             'tracked': tracked,
             'used': used,
-            # 本模块固件不支持 GSA，此时「参与解算」无法判定，界面必须如实显示未知
+            # 未收到 GSA 时「参与解算」无法判定，界面如实显示未知（不臆造）；
+            # 用预设「标准遥测输出」开启 LOG <port> GPGSA 即可（实发 $GNGSA）。
             'used_source': 'GSA' if self.gsa_seen else None,
             'system_source_inferred': inferred,
             'by_system': {
@@ -614,11 +615,11 @@ class GnssState:
         if satellites['tracked'] == 0:
             add('warn', '未收到卫星信息', '未解析到 $GPGSV / $GPGSVH 中的卫星。')
         elif not self.gsa_seen:
-            add('info', '本模块不上报 GSA，「参与解算」只能显示为未知',
-                '实测该固件不支持 GSA/VTG（help 返回 not found）。仰角/方位角/C-N0 来自 GSV，仍然有效；'
-                'SATVISA/RANGEA 虽被模块识别，但厂家手册 R1.13~R1.15（中/英）未定义其字段，'
-                '且相近的 SATELLITE（可见卫星）不含逐星入解标志——逐星入解需 BESTSAT/BESTSATA'
-                '（本机当前未输出）。所以本项如实显示未知，不做臆造。')
+            add('info', '未收到 GSA，「参与解算」暂时无法判定',
+                '本模块支持 GSA（配置名 GPGSA，实发 $GNGSA；实测 help GPGSA 有效），'
+                '但当前端口未开启该日志，故本项如实显示未知、不做臆造。'
+                '用预设「标准遥测输出」即可开启（会自动选取本连接所在的模块串口）。'
+                '仰角/方位角/C-N0 来自 GSV，不受影响。')
 
         if satellites.get('system_source_inferred'):
             add('info', f'{satellites["system_source_inferred"]} 颗卫星的星座由 PRN 号段推断',

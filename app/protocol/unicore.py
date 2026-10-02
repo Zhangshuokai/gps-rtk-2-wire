@@ -582,14 +582,16 @@ COMMAND_PRESETS = [
         'id': 'telemetry',
         'name': '标准遥测输出',
         'safe': False,
-        'note': '把该端口改成 1Hz 定位 + 10Hz 双天线定向 + 10Hz 速度（PVTSLNA，北/东分量）。'
-                '日志名取自模块 LOGLIST 实测（GPGGA/GPRMC/GNGSV/GPTHS/UNIHEADINGA，'
-                '注意不是 GNGGA/GPGSV）；PVTSLNA 为厂家已识别日志，提供北/东速度（无天向）。'
+        'note': '把该端口改成 1Hz 定位 + GSA + 10Hz 双天线定向 + 10Hz 速度（PVTSLNA，北/东分量）。'
+                '日志名取自模块 LOGLIST/help 实测（GPGGA/GPRMC/GPGSA/GNGSV/GPTHS/UNIHEADINGA，'
+                '注意不是 GNGGA/GPGSV）；GPGSA 用于逐星「参与解算」（实发 $GNGSA）；'
+                'PVTSLNA 为厂家已识别日志，提供北/东速度（无天向）。'
                 'UNLOGALL 会丢弃原有日志配置，且本预设【不会】写入 flash。',
         'commands': [
             'UNLOGALL {PORT}',
             'LOG {PORT} GPGGA ONTIME 1',
             'LOG {PORT} GPRMC ONTIME 1',
+            'LOG {PORT} GPGSA ONTIME 1',
             'LOG {PORT} GNGSV ONTIME 1',
             'LOG {PORT} GPTHS ONTIME 0.1',
             'LOG {PORT} UNIHEADINGA ONTIME 0.1',

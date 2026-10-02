@@ -85,17 +85,20 @@ $CONFIG,COM1,CONFIG COM1 115200
 >    写预设时要用配置名（`GPGGA`/`GPRMC`/`GNGSV`），不要用 `GNGGA`/`GPGSV`。
 > 2. `GNGSVH` 只配在 COM3 上，这条线索可用于判断**本连接到底位于模块的哪个串口**（见 §3）。
 
-### 2.3 本模块不支持的日志（实测 `help` 返回 `not found`）
+### 2.3 GSA / VTG 的配置名带 `GP` 前缀（易错）
 
-`GSA`、`VTG`、`TRACKSTATA`、`HEADING2`、`INSA`、`GNSSPOS`、`GNSSVEL`、`NOISEFLOOR` 等均**不支持**。
+裸名 `GSA`、`VTG`、`TRACKSTATA`、`HEADING2`、`INSA`、`GNSSPOS`、`GNSSVEL`、`NOISEFLOOR`
+等的 `help` 返回 `not found`；但 **`GPGSA` / `GPVTG` 实际受支持**（2026-10 实机：
+`help GPGSA` 返回 `NEMA DOP and active satelitltes` 说明，`LOG COM3 GPGSA ONTIME 1`
+立即输出 `$GNGSA`）。此前"不支持 GSA/VTG"是**查了裸名导致的误判**。
 
-直接影响：**「卫星是否参与解算」无法判定**。本程序原本用 `$--GSA` 判定该列，
-而本模块不发 GSA，因此界面会明确显示「参与解算（GSA 不可用）」并置为 `—`，
-而不是错误地显示「否」。仰角/方位角/C-N0 来自 GSV，仍然有效。
+直接影响：「卫星是否参与解算」由 `$GNGSA` 判定，本程序**已能解析**；仅当该日志未开启时，
+界面如实显示「参与解算（GSA 未开启）」并置 `—`（不臆造）。用「标准遥测输出」预设
+（已含 `LOG {PORT} GPGSA ONTIME 1`）开启即可；速度/航迹角仍主要用 `$GNRMC`（`GPVTG` 亦可用）。
 2026-10 复核：`SATVISA`/`RANGEA` 虽被模块识别，但厂家手册 R1.13/R1.14/R1.15（中/英）
 均**未定义 `SATVIS`/`SATVISA`**；最接近的 `SATELLITE`（ASCII `SATELLITEA`，可见卫星）
-逐星只有 PRN/健康/仰角/方位，**不含逐星入解标志**。厂家真正用于「参与解算」的是
-`BESTSAT`（ASCII `BESTSATA`）。因此本机仍未实现逐星入解，界面继续如实显示 `—`。
+逐星只有 PRN/健康/仰角/方位，**不含逐星入解标志**。厂家另有 `BESTSAT`（ASCII `BESTSATA`）
+提供逐星入解，但本机实测无输出，故 GSA 是当前唯一可用的逐星入解来源。
 
 ### 2.4 支持的日志名（实测）
 
@@ -271,7 +274,7 @@ gps-rtk/
 无需硬件即可运行，共 **10 组 80 余项检查**，覆盖协议解析、状态汇聚、记录与回放往返、
 畸形/非有限数值输入的健壮性、坏报文不打断读取线程的回归、GSA 系统归属、解质量映射、
 安全边界（静态路径穿越、同源校验、预设内容），以及**双天线定向/定位的实装核查**
-（LOGLIST 解析、预设日志名、GSA 缺失时的不确定性标注、PRN 号段星座推断、基线长度未设的诊断）：
+（LOGLIST 解析、预设日志名、GPGSA 预设、GSA 缺失时的不确定性标注、PRN 号段星座推断、基线长度未设的诊断）：
 
 ```bat
 python tests\test_e2e.py
@@ -293,7 +296,7 @@ python tests\test_e2e.py
 | `无有效定位（quality=0）` | **本机当前就是这个状态**：模块报告 `INSUFFICIENT_OBS`，0 颗卫星在视 |
 | `无有效航向` | 需要主天线和从天线都收到足够卫星，且两天线连线方向即为航向基准（基线两端不可互换） |
 | 提示 `CONFIG HEADING FIXLENGTH 未设置基线长度` | **实测本机正是如此**（该行没有数值）。固定基线为空会拖累定向精度甚至不给解：用「设置基线长度」预设填入两天线实际间距，或改用 `MODE HEADING STATIC` |
-| 「参与解算」整列是 `—` | 正常。本模块固件**不支持 GSA/VTG**，无法逐星判定是否入解，界面如实标注为不可用 |
+| 「参与解算」整列是 `—` | 该端口的 GSA 日志未开启。本模块**支持** GSA（配置名 `GPGSA`，实发 `$GNGSA`），用「标准遥测输出」预设开启即可；未开启时界面如实标注为未知 |
 | 「模块日志配置」面板为空 | 点「列出当前日志配置（只读）」发送一次 `LOGLIST` |
 | 卫星的星座后面带 `*` | 该星星座是按 PRN 号段推断的（本机 GSV 用组合 talker，分不出星座）；若模块对每个星座独立编号 PRN，推断可能不准 |
 | `UNIHEADINGA 航向与 $GPTHS 相差过大` | 勾选「交换 UNIHEADINGA 中的航向/俯仰字段」 |
@@ -364,11 +367,13 @@ python tests\test_e2e.py
   `CONFIG SMOOTH`/`PSRVELDRPOS` 配置项）；仅 NovAtel 同名日志可作线索，不足以确证
   Unicore 的字段含义。按「不确证不臆造」，**不解析**，界面「速度 天」保持 `—`
   （详见 `docs/protocol/unicore-ascii.md` §6.5）。
-* **「卫星是否参与解算」在本模块上无法实现**：固件不支持 `GSA`/`VTG`（实测 `help` 返回
-  not found），界面如实标注为不可用而不是猜测。`SATVISA`/`RANGEA` 这两个日志名实测被模块
-  识别，但 2026-10 复核厂家手册 R1.13/R1.14/R1.15（中/英）均未定义 `SATVIS`/`SATVISA`，
-  而相近的 `SATELLITE`（可见卫星）逐星只有 PRN/健康/仰角/方位，没有入解标志；厂家用于
-  逐星入解的是 `BESTSAT`（`BESTSATA`）。故不臆造该列，界面继续显示 `—`。
+* **「卫星是否参与解算」由 GSA 判定**：本模块支持 GSA，配置名是 `GPGSA`（实发 `$GNGSA`，
+  每星座一条、末尾为系统 ID），本程序已能解析；「标准遥测输出」预设已含
+  `LOG {PORT} GPGSA ONTIME 1`。此前"不支持"是查了裸名 `GSA` 导致的误判。未开启该日志时
+  界面如实显示未知而不是猜测。`SATVISA`/`RANGEA` 这两个日志名实测被模块识别，但 2026-10
+  复核厂家手册 R1.13/R1.14/R1.15（中/英）均未定义 `SATVIS`/`SATVISA`，而相近的
+  `SATELLITE`（可见卫星）逐星只有 PRN/健康/仰角/方位，没有入解标志；厂家另有的
+  `BESTSAT`（`BESTSATA`）本机实测无输出，故 GSA 是当前唯一可用的逐星入解来源。
 * 本机 GSV 使用组合 talker（配置名 `GNGSV`、实发 `$GPGSV`），talker 分不出星座，
   程序按 PRN 号段推断（1-32 GPS / 65-96 GLONASS / 301-336 Galileo / 401-437 北斗 …），
   推断出的星座在界面上以 `*` 标记。若模块对每个星座使用独立 PRN 编号，推断可能不准。
