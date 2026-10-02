@@ -195,7 +195,7 @@ class Simulator:
         for group, setting in (
             ('ANTENNA', 'CONFIG ANTENNA POWERON'),
             ('HEADING', 'CONFIG HEADING RELIABILITY 3'),
-            ('HEADING', 'CONFIG HEADING FIXLENGTH 1.200'),
+            ('HEADING', 'CONFIG HEADING FIXLENGTH'),
             ('RTK', 'CONFIG RTK TIMEOUT 600'),
             ('COM1', 'CONFIG COM1 115200'),
         ):
@@ -380,7 +380,7 @@ class Simulator:
         for group, setting in (
             ('ANTENNA', 'CONFIG ANTENNA POWERON'),
             ('HEADING', 'CONFIG HEADING RELIABILITY 3'),
-            ('HEADING', 'CONFIG HEADING FIXLENGTH 1.200'),
+            ('HEADING', 'CONFIG HEADING FIXLENGTH'),
             ('RTK', 'CONFIG RTK TIMEOUT 600'),
             ('RTK', 'CONFIG RTK RELIABILITY 3 1'),
             ('PPS', 'CONFIG PPS ENABLE GPS POSITIVE 500000 1000 0 0'),

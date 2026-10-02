@@ -214,6 +214,37 @@
     </section>
 
     <section class="card">
+      <h2>双天线定向设置</h2>
+      <p class="hint">
+        <code>CONFIG HEADING FIXLENGTH</code> 是固定的定向模式（本身不带数值）；
+        真正要填的是 <code>CONFIG HEADING LENGTH</code>，单位<strong>厘米</strong>。
+        用下面的中文选项直接下发，无需手写命令。
+      </p>
+      <div class="row">
+        <label>基线长度</label>
+        <input type="number" id="baselineInput" value="120" min="1" max="10000" step="1">
+        <span class="unit">厘米</span>
+      </div>
+      <div class="row">
+        <label>容差</label>
+        <input type="number" id="toleranceInput" value="3" min="1" max="1000" step="1">
+        <span class="unit">厘米</span>
+      </div>
+      <div class="row checks">
+        <label class="check"><input type="checkbox" id="chkHeadingSave">
+          同时写入 flash（SAVECONFIG，覆盖模块已保存的配置，不可撤销）</label>
+      </div>
+      <div class="btn-row">
+        <button class="primary" id="btnApplyHeading">应用定向设置</button>
+      </div>
+      <p class="hint" id="headingCfgResult">尚未应用。点击后这里会显示下发结果。</p>
+      <p class="hint">
+        基线长度 = 两台天线相位中心之间的实际距离（如 1.2 m 填 120）；容差模块要求必须大于 0。
+        改完可点「查询设备信息」复查 <code>CONFIG</code> 回显。
+      </p>
+    </section>
+
+    <section class="card">
       <h2>Unicore 命令控制台</h2>
       <p class="hint">
         实测命令<strong>不带</strong> <code>#</code>/<code>$</code> 前缀，直接发送文本 + CRLF，且无需校验和。

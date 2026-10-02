@@ -446,6 +446,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'ok': True, 'swap': self.context.state.heading_swap})
             return
 
+        if route == '/api/heading/config':
+            baseline_cm = payload.get('baseline_cm')
+            tolerance_cm = payload.get('tolerance_cm', 3)
+            # 严格布尔：字符串 "false" 不是 False，避免误触发不可逆的 SAVECONFIG
+            save = payload.get('save') is True
+            try:
+                commands = unicore.build_heading_config(baseline_cm, tolerance_cm, save)
+            except ValueError as exc:
+                self._json({'ok': False, 'error': str(exc)}, 400)
+                return
+            results = []
+            for command in commands:
+                result = self.context.send_command(command)
+                results.append(result)
+                # 串口写入失败即中止，绝不在前序命令未成功时继续下发 SAVECONFIG
+                if not result['ok']:
+                    break
+                time.sleep(0.05)
+            self._json({'ok': all(r['ok'] for r in results) and len(results) == len(commands),
+                        'commands': commands, 'results': results})
+            return
+
         if route == '/api/record':
             action = str(payload.get('action') or '')
             interval = float(payload.get('interval') or 0.2)

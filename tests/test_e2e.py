@@ -403,6 +403,30 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
           all('SAVECONFIG' not in cmd for cmd in presets['telemetry']['commands']))
     check('写 flash 被拆成独立预设',
           presets.get('saveconfig', {}).get('commands') == ['SAVECONFIG'])
+    # 定向基线设置已从「原始命令预设」改为界面中文选项，命令由后端统一构造
+    check('定向设置：FIXLENGTH 模式开关 + LENGTH(cm, tol)',
+          unicore.build_heading_config(120, 3) == ['CONFIG HEADING FIXLENGTH',
+                                                   'CONFIG HEADING LENGTH 120 3'])
+    check('定向设置：可附带写 flash',
+          unicore.build_heading_config(120, 3, True)[-1] == 'SAVECONFIG')
+    check('定向设置：不再生成不存在的 MODE HEADING STATIC',
+          not any('MODE HEADING' in c for p in unicore.COMMAND_PRESETS for c in p['commands']))
+
+    def _heading_rejects(baseline_cm, tolerance_cm=3):
+        try:
+            unicore.build_heading_config(baseline_cm, tolerance_cm)
+            return False
+        except ValueError:
+            return True
+
+    check('定向设置：非法/缺失基线长度被拒绝',
+          _heading_rejects(None) and _heading_rejects(0) and _heading_rejects(-1)
+          and _heading_rejects('abc') and _heading_rejects(float('inf')))
+    check('定向设置：容差必须 > 0',
+          _heading_rejects(120, 0) and _heading_rejects(120, -1) and _heading_rejects(120, None))
+    # 取整后为 0 会被模块拒绝（the second para > 0!），必须在本地拦下而不是发出去
+    check('定向设置：取整后为 0 的参数被拒绝',
+          _heading_rejects(0.4) and _heading_rejects(120, 0.4))
     all_commands = [cmd for p in unicore.COMMAND_PRESETS for cmd in p['commands']]
     check('预设不再硬编码 COM1', not any('COM1' in cmd for cmd in all_commands),
           '; '.join(c for c in all_commands if 'COM1' in c))
@@ -454,6 +478,14 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     check('存在只读 LOGLIST 预设',
           any(p['id'] == 'loglist' and p['commands'] == ['LOGLIST'] and p['safe']
               for p in unicore.COMMAND_PRESETS))
+    # 2026-10 实机确证：本模块支持 GSA，配置名是 GPGSA（裸名 GSA 才 not found），
+    # 实发 $GNGSA。标准遥测预设必须带上它，否则「参与解算」永远显示未知。
+    check('标准遥测预设开启 GPGSA（逐星参与解算）',
+          any(p['id'] == 'telemetry'
+              and any(cmd.startswith('LOG {PORT} GPGSA ') for cmd in p['commands'])
+              for p in unicore.COMMAND_PRESETS))
+    check('预设不使用裸名 GSA（裸名 help 返回 not found，是错误写法）',
+          not any(re.search(r'\bGSA\b', cmd) and 'GPGSA' not in cmd for cmd in all_commands))
 
     # GSA 缺失（未开启日志）：界面必须显示未知而不是“否”
     st7 = state_mod.GnssState()
@@ -478,14 +510,6 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     check('#SATVISA 不会伪造逐星「参与解算」',
           snap7b['satellites']['used'] == 0
           and all(not s.get('used') for s in snap7b['satellites']['list']),
-    # 2026-10 实机确证：本模块支持 GSA，配置名是 GPGSA（裸名 GSA 才 not found），
-    # 实发 $GNGSA。标准遥测预设必须带上它，否则「参与解算」永远显示未知。
-    check('标准遥测预设开启 GPGSA（逐星参与解算）',
-          any(p['id'] == 'telemetry'
-              and any(cmd.startswith('LOG {PORT} GPGSA ') for cmd in p['commands'])
-              for p in unicore.COMMAND_PRESETS))
-    check('预设不使用裸名 GSA（裸名 help 返回 not found，是错误写法）',
-          not any(re.search(r'\bGSA\b', cmd) and 'GPGSA' not in cmd for cmd in all_commands))
           str(snap7b['satellites']['used']))
     check('#SATVISA 不会把 used_source 谎报为 SATVISA',
           snap7b['satellites']['used_source'] is None,
@@ -535,16 +559,14 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     prns8c = sorted(s['prn'] for s in st8b.snapshot()['satellites']['list'])
     check('信号集整轮替换后消失的卫星被清理', prns8c == [10, 26, 42], str(prns8c))
 
-    # 固定基线长度未设值 —— 实测本机就是这个状态，会直接拖累定向
+    # 双天线定向：CONFIG 回显不包含 HEADING LENGTH（实测设了也不回显），
+    # 因此不能凭“回显里没有”判定未设基线长度，不产生告警
     st9 = state_mod.GnssState()
     st9.feed_line('$CONFIG,HEADING,CONFIG HEADING FIXLENGTH*6F')
     st9.feed_line('$CONFIG,HEADING,CONFIG HEADING RELIABILITY 3*67')
     texts = ' '.join(a['text'] for a in st9.snapshot()['alerts'])
-    check('识别出 CONFIG HEADING FIXLENGTH 未设基线长度', 'FIXLENGTH' in texts, texts[:120])
-    st10 = state_mod.GnssState()
-    st10.feed_line('$CONFIG,HEADING,CONFIG HEADING FIXLENGTH 1.200*00')
-    texts10 = ' '.join(a['text'] for a in st10.snapshot()['alerts'])
-    check('设了基线长度就不再报警', 'FIXLENGTH' not in texts10)
+    check('不再凭 CONFIG 回显误报“未设基线长度”（LENGTH 不回显）',
+          '基线长度' not in texts, texts[:160])
 
     # 模拟器应能产出 LOGLIST，供界面「模块日志配置」面板使用
     sim._emit_loglist()

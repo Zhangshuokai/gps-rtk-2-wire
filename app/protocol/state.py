@@ -631,16 +631,6 @@ class GnssState:
             add('info', f'设备 {self.device.get("model")} / {self.device.get("firmware")}',
                 f'产品型号 {self.device.get("product")}，SN {self.device.get("serial")}')
 
-        # 双天线定向：固定基线长度是否真的设过（实测本机该行没有数值）
-        if any(
-            len(setting.split()) < 4 and setting.upper().split()[:3] == ['CONFIG', 'HEADING', 'FIXLENGTH']
-            for setting in self.config
-        ):
-            add('warn', 'CONFIG HEADING FIXLENGTH 未设置基线长度',
-                '模块配置里这一项没有数值，固定基线长度为空，定向收敛后精度会很差甚至不给解。'
-                '请用「设置基线长度」预设填入两天线相位中心的实际间距（米），'
-                '或改用 MODE HEADING STATIC 让模块自行估计基线。')
-
         if self.checksum_errors:
             add('warn', f'NMEA 校验和错误 {self.checksum_errors} 条',
                 f'共校验 {self.checksum_checked} 条，可能存在串口误码或波特率不匹配。')

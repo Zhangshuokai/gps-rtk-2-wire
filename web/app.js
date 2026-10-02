@@ -725,6 +725,43 @@ async function sendCommands() {
   }
 }
 
+/* ======================== 双天线定向设置面板 ======================== */
+
+async function applyHeadingConfig() {
+  const button = $('btnApplyHeading');
+  const out = $('headingCfgResult');
+  const show = (text) => { if (out) out.textContent = text; };
+  const save = $('chkHeadingSave').checked;
+  if (save && !window.confirm('将把当前全部配置写入 flash：会覆盖模块已保存的配置，且无法一键还原。确定继续？')) {
+    show('已取消：未写入 flash。');
+    return;
+  }
+  button.disabled = true;
+  show('正在下发…');
+  const result = await api('/api/heading/config', {
+    baseline_cm: parseFloat($('baselineInput').value),
+    tolerance_cm: parseFloat($('toleranceInput').value),
+    save,
+  });
+  button.disabled = false;
+  if (!result.ok) {
+    show(`✗ 应用失败：${result.error || '未知错误'}`);
+    pushAck(`✗ 定向设置失败：${result.error || '未知错误'}`);
+    return;
+  }
+  const commands = result.commands || [];
+  for (const command of commands) pushAck(`→ ${command}`);
+  const failed = (result.results || []).filter((item) => !item.ok);
+  if (failed.length) {
+    const message = failed.map((item) => item.error || '失败').join('；');
+    show(`⚠ 部分命令发送失败：${message}`);
+    pushAck('⚠ 部分命令发送失败，请查看上方回执');
+  } else {
+    show(`✓ 已下发（${commands.length} 条）：${commands.join(' / ')}`);
+    pushAck('✓ 定向设置已下发');
+  }
+}
+
 /* ============================ 原始报文 ============================ */
 
 function renderRaw(lines) {
@@ -979,6 +1016,8 @@ function bindEvents() {
 
   $('btnSend').onclick = sendCommands;
   $('btnClearCmd').onclick = () => { $('cmdText').value = ''; };
+
+  $('btnApplyHeading').onclick = applyHeadingConfig;
 
   $('btnRecAll').onclick = async () => {
     const interval = parseFloat($('recInterval').value) || 0.2;

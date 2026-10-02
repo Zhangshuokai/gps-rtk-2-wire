@@ -625,24 +625,57 @@ COMMAND_PRESETS = [
         'name': '设置为移动站（rover）',
         'safe': False,
         'note': '当前实测模式即 MODE ROVER UAV。'
-                '另：模块还支持 MODE HEADING [fixlength|static]，若要用固定基线做纯定向可改用该模式。',
+                '定向基线的设置请用界面「双天线定向设置」面板（中文选项，无需手写命令）。',
         'commands': ['MODE ROVER UAV'],
-    },
-    {
-        'id': 'baseline',
-        'name': '设置基线长度（双天线间距）',
-        'safe': False,
-        'note': '★ 实测 CONFIG 回显为「CONFIG HEADING FIXLENGTH」——【没有长度数值】，'
-                '即固定基线长度未设置。这会让定向在收敛后精度不佳甚至无法给解。'
-                '请把 1.200 改成两天线相位中心之间的实际距离（米）后发送。'
-                '若两天线间距未知，用 MODE HEADING STATIC 让模块自行估计。',
-        'commands': ['CONFIG HEADING FIXLENGTH 1.200'],
     },
 ]
 
 # 预设里 {PORT} 占位符表示「模块自己的串口名」（COM1/COM2/COM3…），
 # 由前端用连接后 CONFIG 查询得到的真实端口名替换——它与 Windows 的 COM 号不是一回事。
 PORT_PLACEHOLDER = '{PORT}'
+
+
+# --------------------------------------------------------------------------- #
+# 双天线定向设置：把界面的中文选项翻译成模块命令
+# --------------------------------------------------------------------------- #
+# 语法依据独立实现的交叉核对（Unicore N4 Command Reference EN R1.14）：
+#   * ``CONFIG HEADING FIXLENGTH`` 是「固定基线」**模式开关**，本身不带数值；
+#     实测本机 CONFIG 回显里它就是这样一行、并非“长度没填”。
+#   * ``CONFIG HEADING LENGTH <cm> <tolerance_cm>`` 才设置基线长度，单位**厘米**，
+#     第二个参数（容差）必须 > 0——本机实测报错原文：
+#     ``This cmd need two paras,and the second para > 0!``
+#   * 不存在 ``MODE HEADING STATIC``（本机实测 PARSING FAILED GRAMMAR ERROR），
+#     不要再加回来。
+
+
+def build_heading_config(baseline_cm, tolerance_cm=3, save: bool = False) -> list[str]:
+    """中文定向选项 -> 模块命令（固定基线长度）。
+
+    ``baseline_cm``：两天线相位中心间距，单位**厘米**（模块口径即厘米），必须 > 0。
+    ``tolerance_cm``：容差，单位厘米，模块要求必须 > 0。
+    ``save``：为 True 时追加 ``SAVECONFIG``（写入 flash，断电/重启后保留）。
+    """
+    try:
+        length_cm = float(baseline_cm)
+        tolerance = float(tolerance_cm)
+    except (TypeError, ValueError):
+        raise ValueError('基线长度与容差都必须是数值（厘米）。')
+    if not math.isfinite(length_cm) or length_cm <= 0:
+        raise ValueError('基线长度必须是大于 0 的有限数值（厘米）。')
+    if not math.isfinite(tolerance) or tolerance <= 0:
+        raise ValueError('容差必须是大于 0 的有限数值（厘米）。')
+    length_round = round(length_cm)
+    tolerance_round = round(tolerance)
+    # 取整后可能变成 0（如 0.4 → 0），而模块要求两个参数都 > 0，必须拒绝而不是发出去
+    if length_round < 1 or tolerance_round < 1:
+        raise ValueError('基线长度与容差取整后都必须至少为 1 厘米。')
+    commands = [
+        'CONFIG HEADING FIXLENGTH',
+        f'CONFIG HEADING LENGTH {length_round} {tolerance_round}',
+    ]
+    if save:
+        commands.append('SAVECONFIG')
+    return commands
 
 
 # --------------------------------------------------------------------------- #

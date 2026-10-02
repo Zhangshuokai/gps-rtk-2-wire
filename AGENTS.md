@@ -72,8 +72,15 @@ python tests\test_e2e.py                  :: 唯一的测试入口
    模块自报的 `COM1/COM2/COM3` 与电脑侧串口名（CH340，实测曾为 `COM10`/`COM11`）是两回事。
    预设里的 `{PORT}` 由前端用该实测值替换；未读到端口时前端拒绝载入含 `{PORT}` 的预设，
    后端也拒发残留 `{PORT}` 的命令（`server.AppContext.send_command`）。
-7. **`CONFIG HEADING FIXLENGTH` 没有数值**——固定基线长度未设置，是双天线定向的已知隐患。
-   已有告警与「设置基线长度」预设；不要删。
+7. **双天线定向基线配置的正确语法**（2026-10 实机 + 独立实现交叉核对）：
+   `CONFIG HEADING FIXLENGTH` 是固定基线**模式开关**，本身不带数值——实测 CONFIG 回显里
+   它就是这样一行，**不是“长度没填”**；真正设长度的是 `CONFIG HEADING LENGTH <cm> <容差cm>`
+   （单位**厘米**，容差必须 > 0，本机实测错误原文 `This cmd need two paras,and the second para > 0!`）。
+   **模块不支持回读该长度**：实测发 `CONFIG HEADING LENGTH 120 3` 返回 `OK`，但再次 `CONFIG`
+   仍不回显此行——因此**不得**用「回显里没有」判断未设、不产生告警。
+   **不存在 `MODE HEADING STATIC`**（实测 `PARSING FAILED GRAMMAR ERROR`），不要再加回来。
+   界面「双天线定向设置」面板（中文选项 → `build_heading_config`，见 `app/protocol/unicore.py`
+   与 `/api/heading/config`）不要删。
 8. **`UNIHEADINGA` 的「航向/俯仰」先后次序已确证**（不删交叉校验）：官方手册
    《Unicore Reference Commands Manual For N4 High Precision Products》V2 EN R1.4
    Table 7-118 明确 `length, heading(0~360°), pitch(±90°), reserved, hdgstddev,

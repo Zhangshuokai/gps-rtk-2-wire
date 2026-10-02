@@ -174,13 +174,14 @@ ID6=`pitch` ±90°、ID8=`hdgstddev`、ID9=`ptchstddev`；并对照 `pyunigps` �
 | `LOGLIST` 含 `GPTHS` | COM1/COM2/COM3 全配，周期 0.1 s | 定向航向的 NMEA 输出**确已开启** |
 | `#UNIHEADINGA` 解状态 | `INSUFFICIENT_OBS`（观测不足），**不是** “功能未启用” | 定向功能**正在尝试解算**，只缺卫星观测 |
 | `CONFIG HEADING RELIABILITY` | `3` | 定向可靠性门限已配置 |
-| `CONFIG HEADING FIXLENGTH` | **无长度数值** | ⚠ 固定基线长度未设置，收敛后精度会差；见下 |
-| `MODE` | `ROVER UAV` | 模块还支持 `MODE HEADING [fixlength\|static]` |
+| `CONFIG HEADING FIXLENGTH` | 存在、无参数 | 这是**固定基线模式开关**（本身不带数值），不是“长度没填” |
+| `CONFIG HEADING LENGTH` | **`CONFIG` 回显不包含它** | 实测发送 `CONFIG HEADING LENGTH 120 3` 返回 `OK`，但再次 `CONFIG` 仍不回显该行 → **不能**用回显缺失判断是否已设 |
+| `MODE` | `ROVER UAV` | 双天线定向无需单独模式；**不存在** `MODE HEADING STATIC`（实测 `PARSING FAILED GRAMMAR ERROR`） |
 
 **结论：双天线定向的数据链路（模块输出 → 串口 → 解析 → 界面）是通的，且设备侧定向功能处于开启状态。**
 当前拿不到航向的唯一原因是没有卫星观测（`$GPGSV,1,1,00`），不是软件或配置缺陷。
-另外一个**需要处理**的配置问题：`CONFIG HEADING FIXLENGTH` 没有数值，
-建议接好天线后立刻用「设置基线长度」预设填入两天线实际间距（或改用 `MODE HEADING STATIC`）。
+基线长度可用「双天线定向设置」面板下发（`CONFIG HEADING FIXLENGTH` + `CONFIG HEADING LENGTH <cm> <容差cm>`），
+但模块不支持回读，界面上**不会**因为回显缺失而告警。
 
 #### 双天线定位在设备侧的实装证据
 
@@ -200,6 +201,7 @@ ID6=`pitch` ±90°、ID8=`hdgstddev`、ID9=`ptchstddev`；并对照 `pyunigps` �
 | --- | --- |
 | 串口连接 | 枚举串口（标注 USB 桥接芯片/蓝牙虚拟口）、波特率、断线自动重连、**试读**（不连接先判断是否为 GNSS 接收机） |
 | 双天线航向 | 罗盘 + 航向/俯仰/基线长度/标准差、俯仰水平仪、解状态、`$GPTHS` 与 `UNIHEADINGA` 对照、字段交换开关 |
+| 双天线定向设置 | 中文选项直接配置定向：基线长度与容差（**厘米**），可选写入 flash；对应 `CONFIG HEADING FIXLENGTH`（模式开关）+ `CONFIG HEADING LENGTH <cm> <容差cm>`，无需手写命令 |
 | 定位信息 | 经纬高、解质量、参与解算卫星数、HDOP、差分龄期、UTC、速度、航迹角 |
 | 卫星星空图 | 极坐标图，按系统着色，圆点大小对应 C/N0，实心=参与解算 |
 | 信噪比 C/N0 | 逐星横向柱状图，带 10 dB-Hz 网格 |
@@ -295,7 +297,7 @@ python tests\test_e2e.py
 | footer 出现「丢弃坏报文」 | 有字段无法解析的报文被跳过（不会中断接收），详情见 `logs` 与界面链路日志 |
 | `无有效定位（quality=0）` | **本机当前就是这个状态**：模块报告 `INSUFFICIENT_OBS`，0 颗卫星在视 |
 | `无有效航向` | 需要主天线和从天线都收到足够卫星，且两天线连线方向即为航向基准（基线两端不可互换） |
-| 提示 `CONFIG HEADING FIXLENGTH 未设置基线长度` | **实测本机正是如此**（该行没有数值）。固定基线为空会拖累定向精度甚至不给解：用「设置基线长度」预设填入两天线实际间距，或改用 `MODE HEADING STATIC` |
+| 航向始终无效、`#UNIHEADINGA` 为 `INSUFFICIENT_OBS` | 定向是两天线的**相对载波相位**解，主/从天线都要有足够卫星。看 GSV：本机 `$GPGSV,1,1,00` 说明主的 GPS 天线几乎收不到星。属**射频/安装/天空视野**问题，不是参数。先解决观测，再谈基线长度 |
 | 「参与解算」整列是 `—` | 该端口的 GSA 日志未开启。本模块**支持** GSA（配置名 `GPGSA`，实发 `$GNGSA`），用「标准遥测输出」预设开启即可；未开启时界面如实标注为未知 |
 | 「模块日志配置」面板为空 | 点「列出当前日志配置（只读）」发送一次 `LOGLIST` |
 | 卫星的星座后面带 `*` | 该星星座是按 PRN 号段推断的（本机 GSV 用组合 talker，分不出星座）；若模块对每个星座独立编号 PRN，推断可能不准 |
@@ -315,10 +317,11 @@ python tests\test_e2e.py
 3. 模块配置 `CONFIG ANTENNA POWERON` 已开启（本机确认为已开启），若天线为有源天线，
    可留意天线馈线是否断路。
 
-**拿到卫星后请顺手做一件事**：本机 `CONFIG HEADING FIXLENGTH` 没有长度数值，
-即固定基线长度未设置。请在界面点「设置基线长度（双天线间距）」，把 `1.200`
-改成两天线相位中心之间的实际距离（米）再发送；若两天线间距未知，
-也可改用 `MODE HEADING STATIC` 让模块自行估计基线。否则定向收敛后精度会明显变差。
+**拿到卫星后请顺手做一件事**：在界面「双天线定向设置」面板填入两天线相位中心之间的
+实际距离（单位**厘米**，例如 1.2 m 填 `120`）与容差（默认 `3`）后点「应用」，
+命令为 `CONFIG HEADING FIXLENGTH` + `CONFIG HEADING LENGTH <cm> <容差cm>`（容差必须 > 0）。
+注意模块**不支持回读**该长度（`CONFIG` 回显里不会出现），所以界面不会用“回显缺失”来判断，
+请自行核对填写的数值与实际安装一致；否则定向收敛后精度会变差。
 
 ---
 
