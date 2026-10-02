@@ -92,8 +92,10 @@ $CONFIG,COM1,CONFIG COM1 115200
 直接影响：**「卫星是否参与解算」无法判定**。本程序原本用 `$--GSA` 判定该列，
 而本模块不发 GSA，因此界面会明确显示「参与解算（GSA 不可用）」并置为 `—`，
 而不是错误地显示「否」。仰角/方位角/C-N0 来自 GSV，仍然有效。
-若确实需要逐星入解状态，可改用 `SATVISA` 或 `RANGEA`（这两个日志名实测被模块识别），
-但其字段格式在本机上**未能验证**，因此程序没有贸然解析。
+2026-10 复核：`SATVISA`/`RANGEA` 虽被模块识别，但厂家手册 R1.13/R1.14/R1.15（中/英）
+均**未定义 `SATVIS`/`SATVISA`**；最接近的 `SATELLITE`（ASCII `SATELLITEA`，可见卫星）
+逐星只有 PRN/健康/仰角/方位，**不含逐星入解标志**。厂家真正用于「参与解算」的是
+`BESTSAT`（ASCII `BESTSATA`）。因此本机仍未实现逐星入解，界面继续如实显示 `—`。
 
 ### 2.4 支持的日志名（实测）
 
@@ -146,8 +148,13 @@ $VERSION  ->  PARSING FAILED NO MATCHING FUNC      ❌
                                                     └sol_status  └pos_type └基线长度 └航向   └俯仰  └保留  └航向σ  └俯仰σ
 ```
 
-字段顺序沿用 NovAtel `HEADING` 约定（`sol_status, pos_type, 基线长度, 航向, 俯仰, …`）。
-**但本机抓包时无有效解，无法实测确证航向/俯仰的先后**，所以程序做了两件事：
+字段顺序**已确证**：`sol_status, pos_type, 基线长度, 航向, 俯仰, 保留, 航向σ, 俯仰σ, 站号, …`
+（2026-09 联网核对和芯星通官方《Unicore Reference Commands Manual For N4 High Precision
+Products》V2 EN R1.4 Table 7-118「UNIHEADING Message Structure」：ID5=`heading` 0~360°、
+ID6=`pitch` ±90°、ID8=`hdgstddev`、ID9=`ptchstddev`；并对照 `pyunigps` 与
+`BL1NH0/um982_driver` 两个第三方实现，三者逐项一致）。
+
+即便如此，程序仍保留两道保险（**不要删除**）：
 
 1. 航向**优先取 `$GPTHS`**（NMEA 语义无歧义），`UNIHEADINGA` 的航向作为对照；
 2. 同时显示两者**差值**：差值长期大于 2° 会弹出红色告警，
@@ -336,19 +343,40 @@ python tests\test_e2e.py
 * Unicore 报文的 `*` 校验和**未校验**（算法未知，非标准 CRC32）；模块自身
   `$command`/`$CONFIG` 的校验和口径是把 `$` 算进去，与标准 NMEA 不同，已在 §2.6 说明。
 * `UNIHEADINGA` 头部字段顺序为观测推断，未标注字段以 `hdrN` 呈现。
-* **`UNIHEADINGA` 的「航向 / 俯仰」先后次序仍未能在实机确证**：模块 `help uniheadinga`
-  只返回 `(null)`，不提供字段说明；抓包期间无固定解，两个字段都是 `0.0000` 无法区分。
-  程序改用语义无歧义的 `$GPTHS` 作为航向主来源，并实时显示两者差值；超过 2° 就提示勾选交换开关。
-* `PVTSLNA` / `BESTPOSA` 已实现解析，但本机默认未开启该日志，字段顺序按 NovAtel
-  `BESTPOS` 约定编写，**未经实机验证**（当前定位以 `$GNGGA` 为准）。
+* **`UNIHEADINGA` 的「航向 / 俯仰」先后次序已确证**（官方手册 V2 EN R1.4 Table 7-118，
+  见 §2.8）；但本机抓包期间无固定解，两个字段都是 `0.0000` 无法用实机数据反证。
+  程序仍以语义无歧义的 `$GPTHS` 作为航向主来源，并实时显示两者差值；超过 2° 就提示
+  勾选交换开关排查映射/安装异常。
+* `PVTSLNA` 的字段偏移已按厂家《Unicore Reference Commands Manual For N4》V2 R1.13
+  **确证**（并经第三方驱动 `sunshineharry/UM982Driver` 交叉验证）：`body[0]` 即定位类型
+  （该日志**没有独立解状态**，旧实现按 NovAtel `BESTPOS` 把 `[0]` 当 sol_status 是错的），
+  海拔/纬度/经度在 `[1]/[2]/[3]`，北/东速度在 `[17]/[18]`（`psrvelnorth`/`psrveleast`），
+  `[19]` 为对地速度，**该日志不提供天向速度**，故界面「速度 北/东/天」的「天」为 `—`。
+  **2026-10 实机确认**：本固件（R4.10Build23575）确实支持 `#PVTSLNA`，真实抓包
+  `fixtures/pvtslna_real.txt`（body 35 字段）已由 `tests/test_e2e.py` 回归锁定；
+  其中 `[12]`（大地水准面差距）与 `[20..]` 等字段语义**未确证**，不要臆造或据此取数。
+  `BESTPOSA` 属 NovAtel `BESTPOS` 布局，**完全不含速度字段**，不再从中取速度
+  （旧实现把 `field 11/12/13` 当 N/E/U 是错的）。模拟器产出 `#PVTSLNA` 以便无硬件时验证。
+* `BESTNAVA` 在厂家手册中确有独立速度字段，但**本机 `help` 未确认支持该日志名**
+  （实测识别到的是 `BESTVELA`/`PSRVELA`），按「不实现硬件不支持的功能」不解析、不下发、不模拟。
+* `PSRVELA` 实机**确实输出**（真实抓包 `fixtures/psrvela_real.txt`），但厂家手册
+  N4 V2 R1.4/R1.13 与 `pyunigps` 都**没有把它定义为日志**（手册里的 `PSRVEL` 只是
+  `CONFIG SMOOTH`/`PSRVELDRPOS` 配置项）；仅 NovAtel 同名日志可作线索，不足以确证
+  Unicore 的字段含义。按「不确证不臆造」，**不解析**，界面「速度 天」保持 `—`
+  （详见 `docs/protocol/unicore-ascii.md` §6.5）。
 * **「卫星是否参与解算」在本模块上无法实现**：固件不支持 `GSA`/`VTG`（实测 `help` 返回
   not found），界面如实标注为不可用而不是猜测。`SATVISA`/`RANGEA` 这两个日志名实测被模块
-  识别，理论上可提供逐星入解状态，但其字段格式在本机未能验证，故未贸然解析。
+  识别，但 2026-10 复核厂家手册 R1.13/R1.14/R1.15（中/英）均未定义 `SATVIS`/`SATVISA`，
+  而相近的 `SATELLITE`（可见卫星）逐星只有 PRN/健康/仰角/方位，没有入解标志；厂家用于
+  逐星入解的是 `BESTSAT`（`BESTSATA`）。故不臆造该列，界面继续显示 `—`。
 * 本机 GSV 使用组合 talker（配置名 `GNGSV`、实发 `$GPGSV`），talker 分不出星座，
   程序按 PRN 号段推断（1-32 GPS / 65-96 GLONASS / 301-336 Galileo / 401-437 北斗 …），
   推断出的星座在界面上以 `*` 标记。若模块对每个星座使用独立 PRN 编号，推断可能不准。
 * `--replay` 按固定行速率回放，不还原原始时间间隔。
 * 「模块串口」下拉框的本连接端口来自 `LOGLIST` 表头（实测 COM3），需要先查一次 `LOGLIST`
   才准确；模块自己的 `COM1/COM2/COM3` 与电脑上的 `COM10` 不是一回事。
+* **程序不写死模块串口号**：`LOG`/`UNLOG` 的目标端口一律取 `LOGLIST` 实测的本连接端口
+  （下拉框默认值）；未读到端口时会拒绝载入含 `{PORT}` 的预设，后端也会拒发残留 `{PORT}`
+  的命令，避免发到错误端口。
 * 自动重连会比对串口设备指纹（VID:PID:序列号:厂商）以识别 COM 号被换设备；
   但 CH340 等适配器若**没有序列号**，同型号适配器互换时指纹相同，无法区分。

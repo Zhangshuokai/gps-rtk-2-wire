@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -47,6 +48,7 @@ from app.protocol import unicore  # noqa: E402
 from app.serial_link import SerialLink  # noqa: E402
 
 FIXTURE = os.path.join(ROOT, 'fixtures', 'um982_raw.txt')
+PVTSLNA_FIXTURE = os.path.join(ROOT, 'fixtures', 'pvtslna_real.txt')
 FAILURES: list[str] = []
 
 
@@ -107,9 +109,100 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
           (heading['heading_deg'], heading['pitch_deg'], heading['baseline_length_m']) == (123.4567, 1.5, 1.2),
           f"{heading['heading_deg']} / {heading['pitch_deg']} / {heading['baseline_length_m']}")
     check('有解时 valid=True', heading['valid'] is True)
+    check('航向σ/俯仰σ 下标正确（hdg=6, ptc=7）',
+          (heading['heading_stddev_deg'], heading['pitch_stddev_deg']) == (0.09, 0.12),
+          f"{heading['heading_stddev_deg']} / {heading['pitch_stddev_deg']}")
     swapped = unicore.parse_heading(frame, swap_heading_pitch=True)
     check('交换开关确实互换航向/俯仰',
           (swapped['heading_deg'], swapped['pitch_deg']) == (1.5, 123.4567))
+    check('交换开关同时互换 σ 字段',
+          (swapped['heading_stddev_deg'], swapped['pitch_stddev_deg']) == (0.12, 0.09))
+
+    # 官方手册《Unicore Reference Commands Manual ... N4 ...》V2 EN R1.4 自带 ASCII 样例，
+    # 用于锁定「已确证」的字段顺序（Table 7-118）。
+    manual = unicore.parse_frame(
+        '#UNIHEADINGA,97,GPS,FINE,2190,365174000,0,0,18,12;'
+        'INSUFFICIENT_OBS,NONE,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,"",0,0,0,0,0,00,0,0*ee072604')
+    manual_heading = unicore.parse_heading(manual) if manual else {}
+    check('官方手册 UNIHEADINGA 样例可解析且与实测同构',
+          manual is not None and manual_heading.get('field_count') == 17
+          and manual_heading.get('sol_status') == 'INSUFFICIENT_OBS'
+          and manual_heading.get('pos_type') == 'NONE',
+          str(manual_heading.get('field_count')))
+    check('官方手册确认字段下标 length=2/heading=3/pitch=4/σ=6,7',
+          (unicore.HEADING_FIELD_BASELINE_LENGTH, unicore.HEADING_FIELD_HEADING,
+           unicore.HEADING_FIELD_PITCH, unicore.HEADING_FIELD_HEADING_STDDEV,
+           unicore.HEADING_FIELD_PITCH_STDDEV) == (2, 3, 4, 6, 7))
+
+    # 厂家《Unicore Reference Commands Manual For N4》确证：PVTSLNA 没有独立 sol_status，
+    # 北/东速度在 body[17]/[18]，body[19] 为对地速度，且不提供天向速度。
+    pvtsln = unicore.parse_frame(
+        '#PVTSLNA,96,GPS,UNKNOWN,1,276100,23575,0,18,3;'
+        'NARROW_INT,42.5000,30.54960000000,114.35950000000,0.0100,0.0080,0.0090,0.5,'
+        'NARROW_INT,42.5000,30.54960000000,114.35950000000,-8.2340,32,32,32,32,'
+        '1.2340,-0.5670,1.3580,DOPPLER_VELOCITY,0.0000,45.0000,2.0000,32,32,32,32,'
+        '1.1,0.7,0.6,1.3,0.9,5.0,32*deadbeef')
+    pvt = unicore.parse_pvt(pvtsln)
+    check('PVTSLNA 定位类型取自 body[0]（该日志无独立解状态）', pvt['pos_type'] == 'NARROW_INT')
+    check('PVTSLNA 北/东速度在 body[17]/[18]',
+          (pvt['vel_n_mps'], pvt['vel_e_mps']) == (1.234, -0.567),
+          f"{pvt['vel_n_mps']} / {pvt['vel_e_mps']}")
+    check('PVTSLNA 对地速度在 body[19]、无天向速度',
+          pvt['ground_speed_mps'] == 1.358 and pvt['vel_u_mps'] is None)
+    check('PVTSLNA 海拔/经纬顺序为 body[1]/[2]/[3]',
+          pvt['height_m'] == 42.5 and round(pvt['lat_deg'], 4) == 30.5496
+          and round(pvt['lon_deg'], 4) == 114.3595)
+
+    # 回归：BESTPOSA 是 NovAtel BESTPOS 布局，绝不含速度（旧实现误把 field 11/12/13 当速度）。
+    bestpos = unicore.parse_frame(
+        '#BESTPOSA,COM1,0,87.5,FINESTEERING,1956,157432.000,00000800,7145,6938;'
+        'SOL_COMPUTED,SINGLE,29.44391220792,-98.61476921244,261.4344,-26.0000,WGS84,'
+        '2.1382,3.1092,4.0429,"",0.000,0.000,8,8,8,8,0,06,00,03*ecf2202b')
+    bpos = unicore.parse_pvt(bestpos)
+    check('BESTPOSA 不含速度（field 11/12/13 不是速度）',
+          (bpos['vel_n_mps'], bpos['vel_e_mps'], bpos['vel_u_mps']) == (None, None, None))
+    check('BESTPOSA 位置仍按 NovAtel 约定解析',
+          round(bpos['lat_deg'], 5) == 29.44391 and bpos['pos_type'] == 'SINGLE')
+
+    # 2026-10 实机抓包回归（fixtures/pvtslna_real.txt，UM982 R4.10Build23575，模块 COM3）：
+    # 锁定「本固件确实支持 #PVTSLNA」以及 body=35 字段时的真实取值。该抓包无固定解，
+    # 故 pos_type=NONE、valid=False、经纬为 0；北/东速度 0，无天向速度（[19] 对地速度 -0.0）。
+    # 文件带 UTF-8 BOM，需剥离；[12]/[20..] 等字段语义尚未确证，此处不臆造断言。
+    with open(PVTSLNA_FIXTURE, encoding='utf-8') as fh:
+        real_lines = [ln.strip().lstrip('\ufeff') for ln in fh]
+    real_lines = [ln for ln in real_lines if ln and not ln.startswith('# ')]
+    real_frame = unicore.parse_frame(real_lines[0])
+    real_pvt = unicore.parse_pvt(real_frame) if real_frame else {}
+    check('实机 #PVTSLNA 可解析且 body 为 35 字段',
+          real_frame is not None and len(real_frame['body_fields']) == 35,
+          str(real_frame and len(real_frame['body_fields'])))
+    check('实机 PVTSLNA 无解时 pos_type=NONE / valid=False',
+          real_pvt.get('pos_type') == 'NONE' and real_pvt.get('valid') is False)
+    check('实机 PVTSLNA 海拔/经纬（body[1]/[2]/[3]）与抓包一致',
+          real_pvt.get('height_m') == -17.0 and real_pvt.get('lat_deg') == 0.0
+          and real_pvt.get('lon_deg') == 0.0)
+    check('实机 PVTSLNA 北/东速度为 0、无天向速度',
+          (real_pvt.get('vel_n_mps'), real_pvt.get('vel_e_mps'),
+           real_pvt.get('vel_u_mps')) == (0.0, 0.0, None))
+    check('实机 PVTSLNA 对地速度为 -0.0（body[19] 速度字段布局成立）',
+          real_pvt.get('ground_speed_mps') == 0.0,
+          repr(real_pvt.get('ground_speed_mps')))
+
+    # PSRVELA：实机确实输出（fixtures/psrvela_real.txt，当前无解故速度字段全 0），但厂家手册
+    # N4 R1.4/R1.13 与 pyunigps 都没有该【日志】的定义（手册里的 PSRVEL 只是 CONFIG 配置项），
+    # 仅 NovAtel 同名日志可作线索，不足以确证 Unicore 的字段含义。按「不确证不臆造」不解析，
+    # 界面「速度 天」保持空——避免重蹈旧版把 PVTSLNA 当 NovAtel BESTPOS 读错字段的覆辙。
+    psrvela_path = os.path.join(ROOT, 'fixtures', 'psrvela_real.txt')
+    psrvela_real = [ln.strip() for ln in open(psrvela_path, encoding='utf-8')
+                    if ln.strip().startswith('#PSRVELA')]
+    pst = state_mod.GnssState()
+    for line in psrvela_real:
+        pst.feed_line(line)
+    psnap = pst.snapshot()
+    check('PSRVELA 未确证故不臆造解析：速度北/东/天均保持为空',
+          len(psrvela_real) > 0 and psnap['velocity']['vel_u_mps'] is None
+          and psnap['velocity']['vel_n_mps'] is None,
+          f"lines={len(psrvela_real)}, vel_u={psnap['velocity']['vel_u_mps']}")
 
     section('3. NMEA 校验和自洽与 talker 消毒')
     for body in ('GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,',
@@ -142,6 +235,17 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     check('航向有效', sim_snap['heading']['valid'] is True)
     check('航向与 $GPTHS 差值 < 2°', sim_snap['heading']['mismatch_deg'] < 2.0,
           str(sim_snap['heading']['mismatch_deg']))
+    # 模拟器必须用同一个地面速度驱动 $GNRMC 与 #PVTSLNA：北/东分量的模应与 RMC 速度一致、
+    # 方向应与 RMC 航迹角一致（防止两套互相矛盾的速度读数；PVTSLNA 无天向，故「天」为空）
+    sim_vel = sim_snap['velocity']
+    magnitude = math.hypot(sim_vel['vel_n_mps'], sim_vel['vel_e_mps'])
+    direction = math.degrees(math.atan2(sim_vel['vel_e_mps'], sim_vel['vel_n_mps'])) % 360.0
+    check('模拟器 PVTSLNA 北/东速度与 $GNRMC 速度/航迹角一致',
+          sim_vel['vel_n_mps'] is not None and sim_vel['vel_u_mps'] is None
+          and abs(magnitude - sim_vel['speed_mps']) < 0.02
+          and abs(direction - sim_vel['course_deg']) < 0.5,
+          f"|v|={magnitude:.3f} vs {sim_vel['speed_mps']}, "
+          f"dir={direction:.2f} vs {sim_vel['course_deg']}")
     check('设备信息已解析', sim_snap['device'].get('model') == 'UM982')
     check('配置项去重后 8 条', len(sim_snap['config']) == 8, str(len(sim_snap['config'])))
     check('模块串口名列表已从 CONFIG 收集（不覆盖为最后一个）',
@@ -187,6 +291,9 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
         check('CSV 写出 3 行（间隔去抖正常）', len(rows) == 3, str(len(rows)))
         check('CSV 中文解质量未损坏', rows[-1]['quality_text'] == 'RTK 固定解', rows[-1]['quality_text'])
         check('CSV 航向列有值', float(rows[-1]['heading_deg']) > 0, rows[-1]['heading_deg'])
+        check('CSV 速度北/东列有值（天向无来源，允许空）',
+              rows[-1]['vel_n_mps'] not in (None, '') and rows[-1]['vel_e_mps'] not in (None, ''),
+              f"{rows[-1]['vel_n_mps']} / {rows[-1]['vel_e_mps']}")
 
         source = simulator.ReplaySource(raw_path, lambda line: None)
         check('回放源跳过注释行、行数一致', len(source._lines) == len(produced),
@@ -302,6 +409,20 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     check('需指定端口的预设使用 {PORT} 占位符',
           any('{PORT}' in cmd for cmd in all_commands))
 
+    # 端口占位必须由前端用实测端口替换；后端兜底拒绝未解析的 {PORT}，避免发错端口
+    class _FakeTransport:
+        is_open = True
+
+        def send_bytes(self, payload):  # noqa: ARG002 - 只需能写
+            return True
+
+    ctx = server_mod.AppContext()
+    ctx.transport = _FakeTransport()
+    rejected = ctx.send_command('LOG {PORT} GPGGA ONTIME 1')
+    check('后端拒绝未解析 {PORT} 的命令（不写死端口）',
+          rejected['ok'] is False and 'PORT' in (rejected.get('error') or ''),
+          str(rejected))
+
     section('10. 双天线定向 / 定位实装核查')
     # LOGLIST：模块自报「现在到底在输出什么」，是定向/定位是否开启的权威依据
     st6 = state_mod.GnssState()
@@ -343,6 +464,27 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
     check('有 GSA 时 used_source 为 GSA',
           st7.snapshot()['satellites']['used_source'] == 'GSA')
 
+    # 2026-10 复核：#SATVISA 不提供「逐星是否参与解算」。厂家手册 R1.13/R1.14/R1.15
+    # （中/英）均未定义 SATVISA；最接近的 SATELLITE(1042)/SATELLITEA（可见卫星）逐星只有
+    # PRN/健康/仰角/方位，没有入解标志；逐星入解是 BESTSAT(1041)/BESTSATA。
+    # 因此即使收到真实 #SATVISA，也绝不能伪造 used 或把 used_source 谎报为 'SATVISA'。
+    st7b = state_mod.GnssState()
+    st7b.feed_line('$GPGSV,1,1,3,04,45,100,40,16,30,200,41,25,60,300,42')
+    st7b.feed_line('#SATVISA,COM3,20,88.0,FINE,2438,463854.000,996381,11,18;'
+                   'TRUE,TRUE,5,4,0,0,39.7,315.9,0.000,17.730,16,0,0,'
+                   '68.1,312.6,0.000,25.410,174,0,0,43.3,283.5,0.000,22.240,'
+                   '186,0,0,35.6,294.0,0.000,28.180,202,0,0,28.1,306.8,0.000,24.170')
+    snap7b = st7b.snapshot()
+    check('#SATVISA 不会伪造逐星「参与解算」',
+          snap7b['satellites']['used'] == 0
+          and all(not s.get('used') for s in snap7b['satellites']['list']),
+          str(snap7b['satellites']['used']))
+    check('#SATVISA 不会把 used_source 谎报为 SATVISA',
+          snap7b['satellites']['used_source'] is None,
+          str(snap7b['satellites']['used_source']))
+    check('#SATVISA 被识别为合法帧而非未知行', st7b.unknown_count == 0,
+          str(st7b.unknown_count))
+
     check('PRN 号段推断：70 -> GLONASS', nmea.system_from_prn(70) == 'GLONASS')
     check('PRN 号段推断：305 -> Galileo', nmea.system_from_prn(305) == 'Galileo')
     check('PRN 号段推断：405 -> BeiDou', nmea.system_from_prn(405) == 'BeiDou')
@@ -357,6 +499,33 @@ def main() -> int:  # noqa: PLR0915 - 线性自测脚本，拆函数反而更难
           str(snap8['satellites']['system_source_inferred']))
     check('组合 GSV 一句内含多星座时旧条目仍被清理（不残留）',
           len(snap8['satellites']['list']) == 3, str(len(snap8['satellites']['list'])))
+
+    # 实测本机 BeiDou 按信号频点分行，连发多条 total=1,index=1 的 $GBGSV/$GBGSVH；
+    # 旧实现每条 index==1 都清空整颗星座，导致 4 颗只剩最后 1 颗。
+    st8b = state_mod.GnssState()
+    for line in (
+        '$GBGSV,1,1,03,26,,,26,42,,,30,14,,,29,1',
+        '$GBGSV,1,1,02,42,,,29,14,,,28,8',
+        '$GBGSV,1,1,01,10,,,23,B',
+        '$GBGSVH,1,1,03,42,,,23,10,,,27,14,,,25,1',
+        '$GBGSVH,1,1,02,42,,,21,14,,,28,8',
+        '$GBGSVH,1,1,01,10,,,24,B',
+    ):
+        st8b.feed_line(line)
+    prns8b = sorted(s['prn'] for s in st8b.snapshot()['satellites']['list'])
+    check('按信号频点分行的 $GBGSV 不再互相清空（保留全部 PRN）',
+          prns8b == [10, 14, 26, 42], str(prns8b))
+    for line in (
+        '$GBGSV,1,1,01,26,,,26,1',
+        '$GBGSV,1,1,01,42,,,30,8',
+        '$GBGSV,1,1,01,10,,,23,B',
+        '$GBGSVH,1,1,01,26,,,27,1',
+        '$GBGSVH,1,1,01,42,,,21,8',
+        '$GBGSVH,1,1,01,10,,,24,B',
+    ):
+        st8b.feed_line(line)
+    prns8c = sorted(s['prn'] for s in st8b.snapshot()['satellites']['list'])
+    check('信号集整轮替换后消失的卫星被清理', prns8c == [10, 26, 42], str(prns8c))
 
     # 固定基线长度未设值 —— 实测本机就是这个状态，会直接拖累定向
     st9 = state_mod.GnssState()
