@@ -1,0 +1,106 @@
+
+===== PAGE 1 =====
+和芯星云NebulasIV 系列产品
+09
+UM982
+BDS/GPS/GLONASS/Galileo/QZSS
+全系统全频高精度定位定向模块
+UM982 是和芯星通自主研发的新一代BDS、GPS、GLONASS、Galileo、QZSS、
+SBAS 全系统全频高精度定位定向模块，基于和芯星通自主研发的新一代射频基带及
+高精度算法一体化GNSS SoC 芯片—NebulasIV 设计。主天线、从天线同时跟踪包括
+北斗三全球信号在内的全系统全频点，实现片上RTK 定位及双天线定向解算。内置
+先进的抗干扰单元，保证了模块即使在复杂电磁环境下仍可提供可靠准确的定位精度。
+面向无人机、自主机器、精准农业等高精度导航定位领域。
+产品特点
+ » 基于最新一代 NebulasIV 射频基带及高精度算法一体化 GNSS SoC 芯片
+ » 支持全系统全频点片上 RTK 定位及双天线定向解算
+ » Dual-RTK 双 RTK 引擎技术，主从天线独立解算
+ » 优秀的抗干扰能力和防欺骗能力，支持干扰检测和欺骗检测
+ » 自适应识别差分输入 RTCM 格式
+ » 支持STANDALONE 单站高精度定位
+ » 支持B2b-PPP、E6-HAS、QZSS L6E (MADOCA) PPP 和SouthPAN L5 PVS 服务
+尺寸 ：16.0 × 21.0 × 2.6 mm
+无人机
+自主机器
+精准农业
+性能指标
+性能指标
+通道
+1408 通道，基于NebulasIV
+冷启动
+< 30 s
+信号
+BDS B1I, B3I,B1C*,B2a,B2b*
+初始化时间
+< 5 s ( 典型值)
+GPS L1C/A, L2P(Y)/L2C, L5
+初始化可靠性
+> 99.9%
+GLONASS G1, G2
+数据更新率
+20 Hz (RTK + Heading)
+Galileo E1, E5a, E5b,E6*
+差分数据
+RTCM V3.X
+QZSS L L1C/B, L2C, L5, L6* 
+数据格式
+NMEA 0183, Unicore
+SBAS L1C/A
+物理特性
+单点定位 (RMS)       
+平面：1.5 m
+封装
+48 pin LGA
+高程：2.5 m
+尺寸
+16.0 × 21.0 × 2.6 mm
+DGPS (RMS)           
+平面：0.4 m
+重量
+1.82 g ± 0.03 g
+高程：0.8 m
+环境指标
+RTK (RMS)          
+平面：0.8 cm + 1 ppm
+工作温度
+-40℃ ~ +85℃
+高程：1.5 cm + 1 ppm
+存储温度
+-55℃ ~ +95℃
+PPP (RMS)
+平面：5 cm
+湿度
+95% 非凝露
+高程：10 cm
+振动
+GB/T 28046.3,1SO 16750-3
+观测精度（RMS）
+BDS          GPS         GLONASS       Galileo
+冲击
+GB/T 28046.3,1SO 16750-3
+B1I/L1 C/A/G1/E1 伪距
+10cm       10cm       10cm               10cm
+功能接口
+B1I/L1 C/A/G1/E1 载波相位
+1mm        1mm       1mm                1mm
+3 × UART (LVTTL) 
+B2I/L5/E5a/E5b 伪距
+10cm       10cm       10cm               10cm
+1 × SPI*
+B2I/L5/E5a/E5b 载波相位
+1mm        1mm       1mm                1mm
+1 × I
+2C*
+B3I/L2P(Y)/L2C/G2 伪距
+10cm       10cm       10cm               10cm
+1 × CAN* ( 与UART3 复用)
+B3I/L2P(Y)/L2C/G2 载波相位
+1mm        1mm       1mm                1mm
+定向精度 (RMS)
+0.1° /1 m 基线
+时间精度 (RMS)
+20 ns
+速度精度 (RMS)
+0.03 m/s
+注：标注 * 部分为特定固件版本支持
+应用领域
