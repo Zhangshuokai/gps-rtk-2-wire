@@ -82,6 +82,9 @@ const SAT_RENDER_INTERVAL_MS = 400;
 let lastSatRender = 0;
 let pitchTrackWidth = 0;
 
+// 罗盘显示模式：false = 北朝上（默认），true = 车头朝上（航向/车头始终朝上）
+let compassHeadingUp = localStorage.getItem('compassHeadingUp') === '1';
+
 function limitOf(key, fallback) {
   const limit = snapshot && snapshot.limit ? snapshot.limit : null;
   const value = limit ? limit[key] : undefined;
@@ -235,8 +238,16 @@ function drawCompass() {
   const valid = Boolean(heading.valid);
   const degrees = valid ? Number(heading.deg) : 0;
 
+  // 车头朝上模式：刻度盘反向旋转，让车头（航向）始终位于正上方
+  const headingUp = compassHeadingUp && valid;
+  const dialRotation = headingUp ? (-degrees * Math.PI) / 180 : 0;
+  const needleRotation = headingUp ? 0 : (degrees * Math.PI) / 180;
+
   ctx.save();
   ctx.translate(cx, cy);
+
+  ctx.save();
+  ctx.rotate(dialRotation);
 
   ctx.beginPath();
   ctx.arc(0, 0, radius, 0, Math.PI * 2);
@@ -269,10 +280,11 @@ function drawCompass() {
       ctx.fillText(names[angle] || String(angle), Math.sin(position) * labelRadius, -Math.cos(position) * labelRadius);
     }
   }
+  ctx.restore();
 
   const color = valid ? '#38bdf8' : '#3f4f66';
   ctx.save();
-  ctx.rotate((degrees * Math.PI) / 180);
+  ctx.rotate(needleRotation);
   ctx.beginPath();
   ctx.moveTo(0, -(radius - 46));
   ctx.lineTo(-11, 26);
@@ -341,6 +353,9 @@ function renderHeading() {
 
   if (document.activeElement !== $('chkSwap')) {
     $('chkSwap').checked = Boolean(heading.swap_enabled);
+  }
+  if (document.activeElement !== $('chkHeadingUp')) {
+    $('chkHeadingUp').checked = compassHeadingUp;
   }
 
   drawCompass();
@@ -1065,6 +1080,13 @@ function bindEvents() {
   $('chkSwap').onchange = async (event) => {
     const result = await api('/api/heading/swap', { value: event.target.checked });
     pushAck(`航向/俯仰字段解释已${result.swap ? '交换' : '还原为默认顺序'}`);
+  };
+
+  $('chkHeadingUp').onchange = (event) => {
+    compassHeadingUp = event.target.checked;
+    localStorage.setItem('compassHeadingUp', compassHeadingUp ? '1' : '0');
+    pushAck(`罗盘已切换为「${compassHeadingUp ? '车头朝上' : '北朝上'}」`);
+    if (snapshot) drawCompass();
   };
 
   $('btnSend').onclick = sendCommands;
